@@ -23,28 +23,33 @@ resource "aws_db_parameter_group" "axialy_mysql" {
   name   = "${var.db_instance_identifier}-params"
 
   parameter {
-    name  = "innodb_buffer_pool_size"
-    value = "134217728"
+    name         = "innodb_buffer_pool_size"
+    value        = "134217728"
+    apply_method = "pending-reboot"
   }
 
   parameter {
-    name  = "max_connections"
-    value = "50"
+    name         = "max_connections"
+    value        = "50"
+    apply_method = "immediate"
   }
 
   parameter {
-    name  = "innodb_log_file_size"
-    value = "67108864"
+    name         = "innodb_log_file_size"
+    value        = "67108864"
+    apply_method = "pending-reboot"
   }
 
   parameter {
-    name  = "slow_query_log"
-    value = "0"
+    name         = "slow_query_log"
+    value        = "0"
+    apply_method = "immediate"
   }
 
   parameter {
-    name  = "general_log"
-    value = "0"
+    name         = "general_log"
+    value        = "0"
+    apply_method = "immediate"
   }
 
   tags = {
