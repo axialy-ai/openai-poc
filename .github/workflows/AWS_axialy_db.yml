@@ -69,6 +69,41 @@ jobs:
         
         echo "Cleanup completed"
 
+    - name: Force cleanup all related resources
+      run: |
+        echo "Performing comprehensive cleanup of all related resources..."
+        
+        # Cleanup parameter groups
+        PARAM_GROUP_NAME="${{ env.DB_INSTANCE_IDENTIFIER }}-params"
+        if aws rds describe-db-parameter-groups --db-parameter-group-name "$PARAM_GROUP_NAME" 2>/dev/null; then
+          echo "Deleting parameter group $PARAM_GROUP_NAME..."
+          aws rds delete-db-parameter-group --db-parameter-group-name "$PARAM_GROUP_NAME" || true
+        fi
+        
+        # Cleanup subnet groups  
+        SUBNET_GROUP_NAME="${{ env.DB_INSTANCE_IDENTIFIER }}-subnet-group"
+        if aws rds describe-db-subnet-groups --db-subnet-group-name "$SUBNET_GROUP_NAME" 2>/dev/null; then
+          echo "Deleting subnet group $SUBNET_GROUP_NAME..."
+          aws rds delete-db-subnet-group --db-subnet-group-name "$SUBNET_GROUP_NAME" || true
+        fi
+        
+        # Cleanup security groups
+        SG_NAME="${{ env.DB_INSTANCE_IDENTIFIER }}-rds-sg" 
+        SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$SG_NAME" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo "None")
+        if [ "$SG_ID" != "None" ] && [ "$SG_ID" != "" ]; then
+          echo "Deleting security group $SG_ID..."
+          aws ec2 delete-security-group --group-id "$SG_ID" || true
+        fi
+        
+        # Cleanup CloudWatch log groups
+        LOG_GROUP="/aws/rds/instance/${{ env.DB_INSTANCE_IDENTIFIER }}/error"
+        if aws logs describe-log-groups --log-group-name-prefix "$LOG_GROUP" --query 'logGroups[0].logGroupName' --output text 2>/dev/null | grep -q "$LOG_GROUP"; then
+          echo "Deleting log group $LOG_GROUP..."
+          aws logs delete-log-group --log-group-name "$LOG_GROUP" || true
+        fi
+        
+        echo "✓ Comprehensive cleanup completed"
+
   deploy:
     runs-on: ubuntu-latest
     name: Deploy RDS and Configure Databases
@@ -91,6 +126,11 @@ jobs:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ${{ github.event.inputs.aws_region }}
+
+    - name: Wait for cleanup completion
+      run: |
+        echo "Waiting 30 seconds for AWS resource cleanup to propagate..."
+        sleep 30
 
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
