@@ -1,6 +1,6 @@
 terraform {
   required_version = ">= 1.6.0"
-
+  
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -8,17 +8,18 @@ terraform {
     }
     random = {
       source  = "hashicorp/random"
-      version = "~> 3.6"
+      version = "~> 3.1"
     }
   }
 }
 
 provider "aws" {
   region = var.aws_region
+  
   default_tags {
     tags = {
-      Project     = "Axialy‑AI"
-      Environment = "prod"
+      Project     = "axialy-ai"
+      Environment = "production"
       ManagedBy   = "terraform"
     }
   }
