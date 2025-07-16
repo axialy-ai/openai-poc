@@ -71,11 +71,13 @@ resource "aws_security_group" "axialy_rds" {
   description = "Security group for Axialy RDS instance"
   vpc_id      = data.aws_vpc.default.id
 
+  # Allow MySQL/Aurora connections from anywhere (will be restricted during setup)
   ingress {
     from_port   = 3306
     to_port     = 3306
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
+    description = "MySQL access from anywhere (temporary for setup)"
   }
 
   egress {
@@ -108,6 +110,9 @@ resource "aws_db_instance" "axialy" {
   vpc_security_group_ids = [aws_security_group.axialy_rds.id]
   db_subnet_group_name   = aws_db_subnet_group.axialy.name
   parameter_group_name   = aws_db_parameter_group.axialy_mysql.name
+  
+  # Make it publicly accessible for initial setup
+  publicly_accessible = true
   
   backup_retention_period = 1
   backup_window          = "03:00-04:00"
