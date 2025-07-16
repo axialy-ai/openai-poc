@@ -128,4 +128,8 @@ resource "aws_db_instance" "axialy" {
 resource "aws_cloudwatch_log_group" "rds_error_log" {
   name              = "/aws/rds/instance/${var.db_instance_identifier}/error"
   retention_in_days = 1
+  
+  tags = {
+    Name = "Axialy RDS Error Logs"
+  }
 }
