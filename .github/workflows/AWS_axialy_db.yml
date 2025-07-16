@@ -1,0 +1,150 @@
+name: AWS – Axialy DB (cheap edition)
+
+on:
+  workflow_dispatch:
+    inputs:
+      db_instance_identifier:
+        description: "RDS instance identifier"
+        required: true
+        default: axialy-db
+      aws_region:
+        description: "AWS region"
+        required: true
+        default: us‑east‑1             # cheapest for RDS
+      db_instance_class:
+        description: "RDS instance class"
+        required: true
+        default: db.t4g.micro          # cheapest burstable Graviton
+      allocated_storage:
+        description: "Initial storage (GiB)"
+        required: true
+        default: "20"                  # gp3, 3k IOPS, 125 MB/s – free tier
+      enable_performance_insights:
+        description: "Turn on Performance Insights (adds cost)"
+        type: boolean
+        default: false
+
+env:
+  AWS_DEFAULT_REGION:      ${{ github.event.inputs.aws_region }}
+  DB_INSTANCE_IDENTIFIER:  ${{ github.event.inputs.db_instance_identifier }}
+
+###############################################################################
+# 1)  PREP – delete pre‑existing instance (optional)
+###############################################################################
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      has_old_instance: ${{ steps.chk.outputs.old }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_DEFAULT_REGION }}
+
+      - id: chk
+        name: Detect legacy DB
+        shell: bash
+        run: |
+          if aws rds describe-db-instances --db-instance-identifier "$DB_INSTANCE_IDENTIFIER" \
+               --query 'DBInstances[0].DBInstanceIdentifier' --output text 2>/dev/null; then
+            echo "old=true" >> $GITHUB_OUTPUT
+          else
+            echo "old=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Purge legacy DB (skip final snapshot)
+        if: steps.chk.outputs.old == 'true'
+        shell: bash
+        run: |
+          set -e
+          aws rds delete-db-instance \
+              --db-instance-identifier "$DB_INSTANCE_IDENTIFIER" \
+              --skip-final-snapshot   \
+              --delete-automated-backups
+          aws rds wait db-instance-deleted --db-instance-identifier "$DB_INSTANCE_IDENTIFIER"
+          echo "✔️  old instance removed"
+
+###############################################################################
+# 2)  DEPLOY – Terraform the new, low‑cost stack
+###############################################################################
+  deploy:
+    runs-on: ubuntu-latest
+    needs: prepare
+    outputs:
+      db_host: ${{ steps.tf.outputs.db_host }}
+      db_port: ${{ steps.tf.outputs.db_port }}
+      db_user: ${{ steps.tf.outputs.db_user }}
+      db_pass: ${{ steps.tf.outputs.db_pass }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_DEFAULT_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+          terraform_wrapper: false
+
+      - name: Terraform init / apply
+        id: tf
+        working-directory: infra/aws_database
+        shell: bash
+        run: |
+          terraform init -input=false
+          terraform apply -auto-approve -input=false \
+            -var="aws_region=${{ github.event.inputs.aws_region }}" \
+            -var="db_instance_identifier=${{ github.event.inputs.db_instance_identifier }}" \
+            -var="db_instance_class=${{ github.event.inputs.db_instance_class }}" \
+            -var="allocated_storage=${{ github.event.inputs.allocated_storage }}" \
+            -var="enable_performance_insights=${{ github.event.inputs.enable_performance_insights }}"
+
+          echo "db_host=$(terraform output -raw db_host)"  >> $GITHUB_OUTPUT
+          echo "db_port=$(terraform output -raw db_port)"  >> $GITHUB_OUTPUT
+          echo "db_user=$(terraform output -raw db_user)"  >> $GITHUB_OUTPUT
+          echo "db_pass=$(terraform output -raw db_pass)"  >> $GITHUB_OUTPUT
+
+      - name: Install MySQL client & import schemas
+        shell: bash
+        env:
+          DB_HOST: ${{ steps.tf.outputs.db_host }}
+          DB_PORT: ${{ steps.tf.outputs.db_port }}
+          DB_USER: ${{ steps.tf.outputs.db_user }}
+          DB_PASS: ${{ steps.tf.outputs.db_pass }}
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get -y install mysql-client
+
+          echo "⏳ waiting 60 s for RDS to accept connections…"
+          sleep 60
+
+          for db in axialy_admin axialy_ui; do
+            mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" \
+                  --ssl-mode=REQUIRED -e \
+              "CREATE DATABASE IF NOT EXISTS $db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+            mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" \
+                  --ssl-mode=REQUIRED "$db" < "db/${db}.sql"
+            echo "✅ imported $db"
+          done
+
+###############################################################################
+# 3)  DONE – print summary
+###############################################################################
+  summary:
+    runs-on: ubuntu-latest
+    needs: deploy
+    steps:
+      - name: Show connection details
+        env:
+          HOST: ${{ needs.deploy.outputs.db_host }}
+          PORT: ${{ needs.deploy.outputs.db_port }}
+          USER: ${{ needs.deploy.outputs.db_user }}
+        run: |
+          echo "🎉 Axialy RDS ready"
+          echo "Endpoint : $HOST:$PORT"
+          echo "User     : $USER"
