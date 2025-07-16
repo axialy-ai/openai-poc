@@ -1,0 +1,71 @@
+name: Verify Database Creation
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify-databases:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Install MySQL Client
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y mysql-client-8.0
+    
+    - name: Verify Databases Were Created
+      env:
+        DB_HOST: ${{ secrets.DB_HOST }}
+        DB_PORT: ${{ secrets.DB_PORT }}
+        DB_USER: ${{ secrets.DB_USER }}
+        DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      run: |
+        echo "Connecting to RDS instance to verify databases..."
+        echo "================================================="
+        
+        # List all databases
+        echo "All databases in the RDS instance:"
+        mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" \
+          --ssl-mode=REQUIRED \
+          --connect-timeout=30 \
+          -e "SHOW DATABASES;"
+        
+        echo ""
+        echo "================================================="
+        
+        # Check axialy_admin database tables
+        echo "Tables in axialy_admin database:"
+        mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" \
+          --ssl-mode=REQUIRED \
+          --connect-timeout=30 \
+          -e "USE axialy_admin; SHOW TABLES;"
+        
+        echo ""
+        echo "================================================="
+        
+        # Check axialy_ui database tables  
+        echo "Tables in axialy_ui database:"
+        mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" \
+          --ssl-mode=REQUIRED \
+          --connect-timeout=30 \
+          -e "USE axialy_ui; SHOW TABLES;"
+        
+        echo ""
+        echo "================================================="
+        
+        # Count records in key tables
+        echo "Sample data verification:"
+        mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" \
+          --ssl-mode=REQUIRED \
+          --connect-timeout=30 \
+          -e "
+          SELECT 'axialy_admin.admin_users' as table_name, COUNT(*) as count FROM axialy_admin.admin_users
+          UNION ALL
+          SELECT 'axialy_ui.ui_users' as table_name, COUNT(*) as count FROM axialy_ui.ui_users
+          UNION ALL  
+          SELECT 'axialy_ui.default_organizations' as table_name, COUNT(*) as count FROM axialy_ui.default_organizations;
+          "
+        
+        echo ""
+        echo "✅ Database verification complete!"
+        echo "Both axialy_admin and axialy_ui databases are properly created."
