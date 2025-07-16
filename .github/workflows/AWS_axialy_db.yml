@@ -1,150 +1,300 @@
-name: AWS – Axialy DB (cheap edition)
+name: AWS Axialy Database Deployment
 
 on:
   workflow_dispatch:
     inputs:
       db_instance_identifier:
-        description: "RDS instance identifier"
+        description: "AWS RDS instance identifier"
         required: true
-        default: axialy-db
+        default: "axialy-database"
       aws_region:
-        description: "AWS region"
+        description: "AWS region (e.g. us-west-2, us-east-1)"
+        default: "us-west-2"
         required: true
-        default: us‑east‑1             # cheapest for RDS
       db_instance_class:
         description: "RDS instance class"
+        default: "db.t4g.micro"
         required: true
-        default: db.t4g.micro          # cheapest burstable Graviton
       allocated_storage:
-        description: "Initial storage (GiB)"
+        description: "Allocated storage in GB"
+        default: "20"
         required: true
-        default: "20"                  # gp3, 3k IOPS, 125 MB/s – free tier
-      enable_performance_insights:
-        description: "Turn on Performance Insights (adds cost)"
-        type: boolean
-        default: false
 
 env:
-  AWS_DEFAULT_REGION:      ${{ github.event.inputs.aws_region }}
-  DB_INSTANCE_IDENTIFIER:  ${{ github.event.inputs.db_instance_identifier }}
+  AWS_DEFAULT_REGION: ${{ github.event.inputs.aws_region }}
+  DB_INSTANCE_IDENTIFIER: ${{ github.event.inputs.db_instance_identifier }}
 
-###############################################################################
-# 1)  PREP – delete pre‑existing instance (optional)
-###############################################################################
 jobs:
   prepare:
     runs-on: ubuntu-latest
+    name: Prepare AWS Environment
     outputs:
-      has_old_instance: ${{ steps.chk.outputs.old }}
+      cleanup_needed: ${{ steps.check_resources.outputs.cleanup_needed }}
+    
     steps:
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            ${{ env.AWS_DEFAULT_REGION }}
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-      - id: chk
-        name: Detect legacy DB
-        shell: bash
-        run: |
-          if aws rds describe-db-instances --db-instance-identifier "$DB_INSTANCE_IDENTIFIER" \
-               --query 'DBInstances[0].DBInstanceIdentifier' --output text 2>/dev/null; then
-            echo "old=true" >> $GITHUB_OUTPUT
-          else
-            echo "old=false" >> $GITHUB_OUTPUT
-          fi
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ github.event.inputs.aws_region }}
 
-      - name: Purge legacy DB (skip final snapshot)
-        if: steps.chk.outputs.old == 'true'
-        shell: bash
-        run: |
-          set -e
-          aws rds delete-db-instance \
-              --db-instance-identifier "$DB_INSTANCE_IDENTIFIER" \
-              --skip-final-snapshot   \
-              --delete-automated-backups
-          aws rds wait db-instance-deleted --db-instance-identifier "$DB_INSTANCE_IDENTIFIER"
-          echo "✔️  old instance removed"
+    - name: Check for existing resources
+      id: check_resources
+      run: |
+        echo "Checking for existing RDS instance..."
+        if aws rds describe-db-instances --db-instance-identifier ${{ env.DB_INSTANCE_IDENTIFIER }} 2>/dev/null; then
+          echo "cleanup_needed=true" >> $GITHUB_OUTPUT
+          echo "Existing RDS instance found - cleanup will be performed"
+        else
+          echo "cleanup_needed=false" >> $GITHUB_OUTPUT
+          echo "No existing RDS instance found - proceeding with fresh deployment"
+        fi
 
-###############################################################################
-# 2)  DEPLOY – Terraform the new, low‑cost stack
-###############################################################################
+    - name: Cleanup existing resources
+      if: steps.check_resources.outputs.cleanup_needed == 'true'
+      run: |
+        echo "Cleaning up existing RDS instance..."
+        aws rds delete-db-instance \
+          --db-instance-identifier ${{ env.DB_INSTANCE_IDENTIFIER }} \
+          --skip-final-snapshot \
+          --delete-automated-backups || true
+        
+        echo "Waiting for RDS instance deletion..."
+        aws rds wait db-instance-deleted \
+          --db-instance-identifier ${{ env.DB_INSTANCE_IDENTIFIER }} || true
+        
+        echo "Cleanup completed"
+
   deploy:
     runs-on: ubuntu-latest
+    name: Deploy RDS and Configure Databases
     needs: prepare
     outputs:
-      db_host: ${{ steps.tf.outputs.db_host }}
-      db_port: ${{ steps.tf.outputs.db_port }}
-      db_user: ${{ steps.tf.outputs.db_user }}
-      db_pass: ${{ steps.tf.outputs.db_pass }}
+      db_host: ${{ steps.deploy_rds.outputs.db_host }}
+      db_port: ${{ steps.deploy_rds.outputs.db_port }}
+      db_user: ${{ steps.deploy_rds.outputs.db_user }}
+      db_pass: ${{ steps.deploy_rds.outputs.db_pass }}
+      instance_id: ${{ steps.deploy_temp.outputs.instance_id }}
+      security_group_id: ${{ steps.deploy_temp.outputs.security_group_id }}
+
     steps:
-      - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            ${{ env.AWS_DEFAULT_REGION }}
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ github.event.inputs.aws_region }}
 
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.6.6
-          terraform_wrapper: false
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.6.6
+        terraform_wrapper: false
 
-      - name: Terraform init / apply
-        id: tf
-        working-directory: infra/aws_database
-        shell: bash
-        run: |
-          terraform init -input=false
-          terraform apply -auto-approve -input=false \
-            -var="aws_region=${{ github.event.inputs.aws_region }}" \
-            -var="db_instance_identifier=${{ github.event.inputs.db_instance_identifier }}" \
-            -var="db_instance_class=${{ github.event.inputs.db_instance_class }}" \
-            -var="allocated_storage=${{ github.event.inputs.allocated_storage }}" \
-            -var="enable_performance_insights=${{ github.event.inputs.enable_performance_insights }}"
+    - name: Terraform Init
+      working-directory: infra/aws_database
+      run: terraform init
 
-          echo "db_host=$(terraform output -raw db_host)"  >> $GITHUB_OUTPUT
-          echo "db_port=$(terraform output -raw db_port)"  >> $GITHUB_OUTPUT
-          echo "db_user=$(terraform output -raw db_user)"  >> $GITHUB_OUTPUT
-          echo "db_pass=$(terraform output -raw db_pass)"  >> $GITHUB_OUTPUT
+    - name: Terraform Plan
+      working-directory: infra/aws_database
+      run: |
+        terraform plan \
+          -var="db_instance_identifier=${{ env.DB_INSTANCE_IDENTIFIER }}" \
+          -var="aws_region=${{ github.event.inputs.aws_region }}" \
+          -var="db_instance_class=${{ github.event.inputs.db_instance_class }}" \
+          -var="allocated_storage=${{ github.event.inputs.allocated_storage }}"
 
-      - name: Install MySQL client & import schemas
-        shell: bash
-        env:
-          DB_HOST: ${{ steps.tf.outputs.db_host }}
-          DB_PORT: ${{ steps.tf.outputs.db_port }}
-          DB_USER: ${{ steps.tf.outputs.db_user }}
-          DB_PASS: ${{ steps.tf.outputs.db_pass }}
-        run: |
-          sudo apt-get -qq update
-          sudo apt-get -y install mysql-client
+    - name: Terraform Apply
+      id: deploy_rds
+      working-directory: infra/aws_database
+      run: |
+        terraform apply -auto-approve \
+          -var="db_instance_identifier=${{ env.DB_INSTANCE_IDENTIFIER }}" \
+          -var="aws_region=${{ github.event.inputs.aws_region }}" \
+          -var="db_instance_class=${{ github.event.inputs.db_instance_class }}" \
+          -var="allocated_storage=${{ github.event.inputs.allocated_storage }}"
 
-          echo "⏳ waiting 60 s for RDS to accept connections…"
-          sleep 60
+        echo "db_host=$(terraform output -raw db_host)" >> $GITHUB_OUTPUT
+        echo "db_port=$(terraform output -raw db_port)" >> $GITHUB_OUTPUT
+        echo "db_user=$(terraform output -raw db_user)" >> $GITHUB_OUTPUT
+        echo "db_pass=$(terraform output -raw db_pass)" >> $GITHUB_OUTPUT
 
-          for db in axialy_admin axialy_ui; do
-            mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" \
-                  --ssl-mode=REQUIRED -e \
-              "CREATE DATABASE IF NOT EXISTS $db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-            mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" \
-                  --ssl-mode=REQUIRED "$db" < "db/${db}.sql"
-            echo "✅ imported $db"
+    - name: Deploy temporary EC2 instance for database setup
+      id: deploy_temp
+      run: |
+        VPC_ID=$(aws ec2 describe-vpcs --filters "Name=is-default,Values=true" --query 'Vpcs[0].VpcId' --output text)
+        
+        SECURITY_GROUP_ID=$(aws ec2 create-security-group \
+          --group-name axialy-db-setup-sg \
+          --description "Temporary security group for Axialy DB setup" \
+          --vpc-id $VPC_ID \
+          --query 'GroupId' \
+          --output text)
+        
+        aws ec2 authorize-security-group-ingress \
+          --group-id $SECURITY_GROUP_ID \
+          --protocol tcp \
+          --port 22 \
+          --cidr 0.0.0.0/0
+        
+        SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
+        
+        INSTANCE_ID=$(aws ec2 run-instances \
+          --image-id ami-0c02fb55956c7d316 \
+          --instance-type t4g.nano \
+          --key-name ${{ secrets.EC2_KEY_PAIR }} \
+          --security-group-ids $SECURITY_GROUP_ID \
+          --subnet-id $SUBNET_ID \
+          --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=axialy-db-setup}]' \
+          --query 'Instances[0].InstanceId' \
+          --output text)
+        
+        aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+        
+        echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+        echo "security_group_id=$SECURITY_GROUP_ID" >> $GITHUB_OUTPUT
+
+    - name: Wait for RDS instance to be available
+      run: |
+        echo "Waiting for RDS instance to be available..."
+        aws rds wait db-instance-available --db-instance-identifier ${{ env.DB_INSTANCE_IDENTIFIER }}
+        echo "RDS instance is available"
+
+    - name: Install MySQL client and configure databases
+      env:
+        DB_HOST: ${{ steps.deploy_rds.outputs.db_host }}
+        DB_PORT: ${{ steps.deploy_rds.outputs.db_port }}
+        DB_USER: ${{ steps.deploy_rds.outputs.db_user }}
+        DB_PASS: ${{ steps.deploy_rds.outputs.db_pass }}
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y mysql-client-8.0
+        
+        echo "Waiting for database to be ready for connections..."
+        sleep 60
+        
+        for db in axialy_admin axialy_ui; do
+          echo ">> Creating database $db"
+          mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" \
+            --ssl-mode=REQUIRED \
+            --connect-timeout=30 \
+            -e "CREATE DATABASE IF NOT EXISTS $db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+          
+          echo ">> Importing schema into $db"
+          max_retries=3
+          retry_count=0
+          
+          while [ $retry_count -lt $max_retries ]; do
+            if mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" \
+                --ssl-mode=REQUIRED \
+                --connect-timeout=30 \
+                "$db" < "db/${db}.sql"; then
+              echo "✓ Schema imported successfully into $db"
+              break
+            else
+              retry_count=$((retry_count + 1))
+              if [ $retry_count -lt $max_retries ]; then
+                echo "Import failed, retrying in 10 seconds... (attempt $retry_count/$max_retries)"
+                sleep 10
+              else
+                echo "Failed to import schema after $max_retries attempts"
+                exit 1
+              fi
+            fi
           done
+        done
+        
+        echo "✓ All databases created and schemas imported successfully"
 
-###############################################################################
-# 3)  DONE – print summary
-###############################################################################
-  summary:
+    - name: Save database credentials as repository secrets
+      env:
+        GH_TOKEN: ${{ secrets.GH_PAT }}
+        DB_HOST: ${{ steps.deploy_rds.outputs.db_host }}
+        DB_PORT: ${{ steps.deploy_rds.outputs.db_port }}
+        DB_USER: ${{ steps.deploy_rds.outputs.db_user }}
+        DB_PASS: ${{ steps.deploy_rds.outputs.db_pass }}
+      run: |
+        if [ -z "$GH_TOKEN" ]; then
+          echo "::warning::GH_PAT secret not set. Cannot update repository secrets automatically."
+          exit 0
+        fi
+
+        gh secret set DB_HOST --body "$DB_HOST"
+        gh secret set DB_PORT --body "$DB_PORT"
+        gh secret set DB_USER --body "$DB_USER"
+        gh secret set DB_PASSWORD --body "$DB_PASS"
+        echo "✓ Repository secrets updated"
+
+    - name: Display deployment summary
+      env:
+        DB_HOST: ${{ steps.deploy_rds.outputs.db_host }}
+        DB_PORT: ${{ steps.deploy_rds.outputs.db_port }}
+        DB_USER: ${{ steps.deploy_rds.outputs.db_user }}
+      run: |
+        echo "========================================"
+        echo "AWS RDS Database deployed successfully!"
+        echo "========================================"
+        echo "Instance: ${{ env.DB_INSTANCE_IDENTIFIER }}"
+        echo "Region  : ${{ github.event.inputs.aws_region }}"
+        echo "Host    : $DB_HOST"
+        echo "Port    : $DB_PORT"
+        echo "User    : $DB_USER"
+        echo "========================================"
+        echo ""
+        echo "Databases created:"
+        echo "- axialy_admin"
+        echo "- axialy_ui"
+        echo ""
+        echo "Next steps:"
+        echo "1. Run the 'Axialy Admin' workflow to deploy the application"
+        echo "2. Access the admin interface to complete initialization"
+        echo ""
+        echo "Note: Database credentials have been saved as GitHub secrets"
+        echo "========================================"
+
+  cleanup:
     runs-on: ubuntu-latest
+    name: Cleanup Temporary Resources
     needs: deploy
+    if: always()
+    
     steps:
-      - name: Show connection details
-        env:
-          HOST: ${{ needs.deploy.outputs.db_host }}
-          PORT: ${{ needs.deploy.outputs.db_port }}
-          USER: ${{ needs.deploy.outputs.db_user }}
-        run: |
-          echo "🎉 Axialy RDS ready"
-          echo "Endpoint : $HOST:$PORT"
-          echo "User     : $USER"
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ github.event.inputs.aws_region }}
+
+    - name: Cleanup temporary resources
+      run: |
+        if [ "${{ needs.deploy.outputs.instance_id }}" != "" ]; then
+          echo "Terminating temporary EC2 instance..."
+          aws ec2 terminate-instances --instance-ids ${{ needs.deploy.outputs.instance_id }}
+          aws ec2 wait instance-terminated --instance-ids ${{ needs.deploy.outputs.instance_id }}
+          echo "EC2 instance terminated"
+        fi
+        
+        if [ "${{ needs.deploy.outputs.security_group_id }}" != "" ]; then
+          echo "Deleting temporary security group..."
+          aws ec2 delete-security-group --group-id ${{ needs.deploy.outputs.security_group_id }}
+          echo "Security group deleted"
+        fi
+        
+        echo "✓ Cleanup completed"
+
+    - name: Final status report
+      run: |
+        if [ "${{ needs.deploy.result }}" == "success" ]; then
+          echo "🎉 Axialy Database deployment completed successfully!"
+          echo "RDS instance '${{ env.DB_INSTANCE_IDENTIFIER }}' is ready for use."
+        else
+          echo "⚠️  Deployment encountered issues. Check the deploy job logs."
+        fi
