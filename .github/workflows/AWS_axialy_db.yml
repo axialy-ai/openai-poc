@@ -219,6 +219,14 @@ jobs:
       run: |
         VPC_ID=$(aws ec2 describe-vpcs --filters "Name=is-default,Values=true" --query 'Vpcs[0].VpcId' --output text)
         
+        # Check if security group already exists and delete it
+        EXISTING_SG=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=axialy-db-setup-sg" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo "None")
+        if [ "$EXISTING_SG" != "None" ] && [ "$EXISTING_SG" != "" ]; then
+          echo "Deleting existing security group: $EXISTING_SG"
+          aws ec2 delete-security-group --group-id "$EXISTING_SG" || true
+          sleep 5  # Wait for deletion to propagate
+        fi
+        
         SECURITY_GROUP_ID=$(aws ec2 create-security-group \
           --group-name axialy-db-setup-sg \
           --description "Temporary security group for Axialy DB setup" \
