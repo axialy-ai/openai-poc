@@ -151,6 +151,54 @@ jobs:
           -var="db_instance_class=${{ github.event.inputs.db_instance_class }}" \
           -var="allocated_storage=${{ github.event.inputs.allocated_storage }}"
 
+    - name: Import existing resources if they exist
+      working-directory: infra/aws_database
+      run: |
+        # Create import helper script
+        cat > import_existing.sh << 'EOF'
+        #!/bin/bash
+        set +e  # Don't exit on errors for imports
+        
+        # Import parameter group if exists
+        PARAM_GROUP="${{ env.DB_INSTANCE_IDENTIFIER }}-params"
+        if aws rds describe-db-parameter-groups --db-parameter-group-name "$PARAM_GROUP" >/dev/null 2>&1; then
+          echo "Importing parameter group: $PARAM_GROUP"
+          terraform import -var="db_instance_identifier=${{ env.DB_INSTANCE_IDENTIFIER }}" -var="aws_region=${{ github.event.inputs.aws_region }}" -var="db_instance_class=${{ github.event.inputs.db_instance_class }}" -var="allocated_storage=${{ github.event.inputs.allocated_storage }}" aws_db_parameter_group.axialy_mysql "$PARAM_GROUP"
+        fi
+        
+        # Import subnet group if exists
+        SUBNET_GROUP="${{ env.DB_INSTANCE_IDENTIFIER }}-subnet-group"
+        if aws rds describe-db-subnet-groups --db-subnet-group-name "$SUBNET_GROUP" >/dev/null 2>&1; then
+          echo "Importing subnet group: $SUBNET_GROUP"
+          terraform import -var="db_instance_identifier=${{ env.DB_INSTANCE_IDENTIFIER }}" -var="aws_region=${{ github.event.inputs.aws_region }}" -var="db_instance_class=${{ github.event.inputs.db_instance_class }}" -var="allocated_storage=${{ github.event.inputs.allocated_storage }}" aws_db_subnet_group.axialy "$SUBNET_GROUP"
+        fi
+        
+        # Import security group if exists
+        SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=${{ env.DB_INSTANCE_IDENTIFIER }}-rds-sg" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo "None")
+        if [ "$SG_ID" != "None" ] && [ "$SG_ID" != "" ]; then
+          echo "Importing security group: $SG_ID"
+          terraform import -var="db_instance_identifier=${{ env.DB_INSTANCE_IDENTIFIER }}" -var="aws_region=${{ github.event.inputs.aws_region }}" -var="db_instance_class=${{ github.event.inputs.db_instance_class }}" -var="allocated_storage=${{ github.event.inputs.allocated_storage }}" aws_security_group.axialy_rds "$SG_ID"
+        fi
+        
+        # Import log group if exists
+        LOG_GROUP="/aws/rds/instance/${{ env.DB_INSTANCE_IDENTIFIER }}/error"
+        if aws logs describe-log-groups --log-group-name-prefix "$LOG_GROUP" --query 'logGroups[0].logGroupName' --output text 2>/dev/null | grep -q "$LOG_GROUP"; then
+          echo "Importing log group: $LOG_GROUP"
+          terraform import -var="db_instance_identifier=${{ env.DB_INSTANCE_IDENTIFIER }}" -var="aws_region=${{ github.event.inputs.aws_region }}" -var="db_instance_class=${{ github.event.inputs.db_instance_class }}" -var="allocated_storage=${{ github.event.inputs.allocated_storage }}" aws_cloudwatch_log_group.rds_error_log "$LOG_GROUP"
+        fi
+        
+        # Import RDS instance if exists
+        if aws rds describe-db-instances --db-instance-identifier "${{ env.DB_INSTANCE_IDENTIFIER }}" >/dev/null 2>&1; then
+          echo "Importing RDS instance: ${{ env.DB_INSTANCE_IDENTIFIER }}"
+          terraform import -var="db_instance_identifier=${{ env.DB_INSTANCE_IDENTIFIER }}" -var="aws_region=${{ github.event.inputs.aws_region }}" -var="db_instance_class=${{ github.event.inputs.db_instance_class }}" -var="allocated_storage=${{ github.event.inputs.allocated_storage }}" aws_db_instance.axialy "${{ env.DB_INSTANCE_IDENTIFIER }}"
+        fi
+        
+        set -e  # Re-enable exit on errors
+        EOF
+        
+        chmod +x import_existing.sh
+        ./import_existing.sh || echo "Import completed with some resources already managed"
+
     - name: Terraform Apply
       id: deploy_rds
       working-directory: infra/aws_database
