@@ -35,6 +35,7 @@ resource "aws_security_group" "axialy_admin" {
   description = "Security group for Axialy Admin application"
   vpc_id      = data.aws_vpc.default.id
 
+  # SSH access
   ingress {
     from_port   = 22
     to_port     = 22
@@ -43,6 +44,7 @@ resource "aws_security_group" "axialy_admin" {
     description = "SSH access"
   }
 
+  # HTTP access
   ingress {
     from_port   = 80
     to_port     = 80
@@ -51,6 +53,7 @@ resource "aws_security_group" "axialy_admin" {
     description = "HTTP access"
   }
 
+  # HTTPS access
   ingress {
     from_port   = 443
     to_port     = 443
@@ -71,11 +74,9 @@ resource "aws_security_group" "axialy_admin" {
   }
 }
 
-# Use template_file data source to avoid heredoc issues
-data "template_file" "user_data" {
-  template = file("${path.module}/user_data_template.sh")
-  
-  vars = {
+# Compact user data script that creates files inline
+locals {
+  user_data = base64encode(templatefile("${path.module}/user_data.sh", {
     db_host              = var.db_host
     db_port              = var.db_port
     db_user              = var.db_user
@@ -88,7 +89,7 @@ data "template_file" "user_data" {
     smtp_user            = var.smtp_user
     smtp_password        = var.smtp_password
     smtp_secure          = var.smtp_secure
-  }
+  }))
 }
 
 # EC2 instance for Axialy Admin
@@ -102,7 +103,7 @@ resource "aws_instance" "axialy_admin" {
 
   associate_public_ip_address = true
 
-  user_data = base64encode(data.template_file.user_data.rendered)
+  user_data = local.user_data
 
   root_block_device {
     volume_type = "gp3"
