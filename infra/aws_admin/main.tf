@@ -100,7 +100,7 @@ resource "aws_instance" "axialy_admin" {
 
   associate_public_ip_address = true
 
-  user_data = base64encode(data.template_file.user_data.rendered)
+  user_data = base64encode(local.user_data)
 
   root_block_device {
     volume_type = "gp3"
