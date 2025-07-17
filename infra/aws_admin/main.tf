@@ -13,19 +13,30 @@ data "aws_subnets" "default" {
   }
 }
 
-# Get the latest Amazon Linux 2023 AMI
+# Get the latest STANDARD Amazon Linux 2023 AMI (NOT ECS Optimized)
 data "aws_ami" "amazon_linux" {
   most_recent = true
   owners      = ["amazon"]
 
   filter {
     name   = "name"
-    values = ["al2023-ami-*-x86_64"]
+    values = ["al2023-ami-2023*-x86_64"]
   }
 
   filter {
     name   = "state"
     values = ["available"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+
+  # CRITICAL: Exclude ECS Optimized AMIs by excluding descriptions containing "ECS"
+  filter {
+    name   = "description"
+    values = ["Amazon Linux 2023 AMI 2023*"]
   }
 }
 
