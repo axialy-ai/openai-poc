@@ -1,4 +1,4 @@
-name: Verify Database Creation
+name: Step 2. Verify Database Creation
 
 on:
   workflow_dispatch:
