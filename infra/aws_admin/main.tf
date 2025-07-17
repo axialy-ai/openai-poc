@@ -737,3 +737,58 @@ locals {
     "chmod +x /usr/local/bin/verify-axialy-admin",
     "",
     "echo '✓ Setup completed successfully. Use \"verify-axialy-admin\" command to check status.'"
+  ]))
+}
+
+# EC2 instance for Axialy Admin
+resource "aws_instance" "axialy_admin" {
+  ami           = data.aws_ami.amazon_linux.id
+  instance_type = var.instance_type
+  key_name      = var.key_pair_name
+
+  vpc_security_group_ids = [aws_security_group.axialy_admin.id]
+  subnet_id              = data.aws_subnets.default.ids[0]
+
+  associate_public_ip_address = true
+
+  user_data = local.user_data
+
+  root_block_device {
+    volume_type = "gp3"
+    volume_size = 30
+    encrypted   = true
+  }
+
+  tags = {
+    Name        = var.instance_identifier
+    Project     = "axialy-ai"
+    Environment = "production"
+    Component   = "admin"
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# Associate existing Elastic IP
+data "aws_eip" "axialy_admin" {
+  id = var.elastic_ip_allocation_id
+}
+
+resource "aws_eip_association" "axialy_admin" {
+  instance_id   = aws_instance.axialy_admin.id
+  allocation_id = data.aws_eip.axialy_admin.id
+
+  depends_on = [aws_instance.axialy_admin]
+}
+
+# CloudWatch Log Group for application logs
+resource "aws_cloudwatch_log_group" "axialy_admin" {
+  name              = "/aws/ec2/${var.instance_identifier}"
+  retention_in_days = 14
+
+  tags = {
+    Name = "Axialy Admin Logs"
+  }
+}
