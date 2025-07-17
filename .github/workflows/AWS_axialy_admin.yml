@@ -183,7 +183,89 @@
             require_once __DIR__ . '/includes/AdminDBConfig.php';
             use Axialy\AdminConfig\AdminDBConfig;
             AdminDBConfig::getInstance()->getPdo();
-            $health['database'] = 'name: AWS Axialy Admin Deployment (Improved)
+            $health['database'] = 'ok';
+        } catch (Exception $e) {
+            $health['status'] = 'error';
+            $health['database'] = 'error';
+        }
+        echo json_encode($health);
+        HEALTH_EOF
+        
+        # Configure PHP
+        cat > /etc/php.ini << 'PHP_INI'
+        [PHP]
+        memory_limit = 256M
+        upload_max_filesize = 50M
+        post_max_size = 50M
+        max_execution_time = 300
+        session.cookie_httponly = 1
+        expose_php = Off
+        display_errors = Off
+        log_errors = On
+        error_log = /var/log/php-errors.log
+        date.timezone = UTC
+        PHP_INI
+        
+        # Configure Apache
+        cat > /etc/httpd/conf.d/axialy-admin.conf << 'APACHE_EOF'
+        <VirtualHost *:80>
+            DocumentRoot /var/www/html
+            DirectoryIndex index.php admin_login.php
+            <Directory /var/www/html>
+                Options -Indexes +FollowSymLinks
+                AllowOverride All
+                Require all granted
+            </Directory>
+            <FilesMatch \.php$>
+                SetHandler "proxy:unix:/run/php-fpm/www.sock|fcgi://localhost"
+            </FilesMatch>
+            ErrorLog /var/log/httpd/axialy-admin-error.log
+            CustomLog /var/log/httpd/axialy-admin-access.log combined
+        </VirtualHost>
+        APACHE_EOF
+        
+        # Set permissions
+        chown -R apache:apache /var/www/html
+        chmod -R 755 /var/www/html
+        chmod 600 /var/www/html/.env
+        
+        # Start services
+        systemctl start httpd php-fpm
+        systemctl enable httpd php-fpm
+        
+        # Create verification script
+        cat > /usr/local/bin/verify-axialy-admin << 'VERIFY_EOF'
+        #!/bin/bash
+        echo "=== Axialy Admin Status ==="
+        echo "Apache: $(systemctl is-active httpd)"
+        echo "PHP-FPM: $(systemctl is-active php-fpm)"
+        echo "HTTP Test: $(curl -s -o /dev/null -w '%{http_code}' http://localhost/admin_login.php || echo 'FAIL')"
+        echo "Health: $(curl -s http://localhost/health.php | grep -o '"status":"[^"]*"' || echo 'FAIL')"
+        VERIFY_EOF
+        chmod +x /usr/local/bin/verify-axialy-admin
+        
+        # Test database connection
+        echo "Testing database connection..."
+        php -r "
+        require_once '/var/www/html/includes/AdminDBConfig.php';
+        use Axialy\AdminConfig\AdminDBConfig;
+        try {
+            AdminDBConfig::getInstance()->getPdo();
+            echo 'Database: OK' . PHP_EOL;
+        } catch (Exception \$e) {
+            echo 'Database: ERROR - ' . \$e->getMessage() . PHP_EOL;
+            exit(1);
+        }
+        "
+        
+        # Final setup
+        sleep 5
+        PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 || echo 'localhost')
+        echo "=== Setup Complete ==="
+        echo "Access: http://$PUBLIC_IP/admin_login.php"
+        echo "Status: $(/usr/local/bin/verify-axialy-admin)"
+        echo "Setup completed at $(date)"
+        USER_DATA_EOFname: AWS Axialy Admin Deployment (Improved)
 
 on:
   workflow_dispatch:
