@@ -184,11 +184,17 @@ chmod 600 /var/www/html/.env
 systemctl start httpd php-fpm
 systemctl enable httpd php-fpm
 
-# Create verification script - ESCAPED the %{http_code} properly
-echo '#!/bin/bash' > /usr/local/bin/verify-axialy-admin
-echo 'echo "Apache: $(systemctl is-active httpd)"' >> /usr/local/bin/verify-axialy-admin
-echo 'echo "PHP-FPM: $(systemctl is-active php-fpm)"' >> /usr/local/bin/verify-axialy-admin
-echo 'echo "Login test: $(curl -s -o /dev/null -w '"'"'%%{http_code}'"'"' http://localhost/admin_login.php)"' >> /usr/local/bin/verify-axialy-admin
+# Create verification script - avoid template parsing issues
+cat > /usr/local/bin/verify-axialy-admin << 'VERIFY_EOF'
+#!/bin/bash
+echo "=== Axialy Admin Status ==="
+echo "Apache: $(systemctl is-active httpd)"
+echo "PHP-FPM: $(systemctl is-active php-fpm)"
+HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' http://localhost/admin_login.php || echo 'FAIL')
+echo "HTTP Test: $HTTP_CODE"
+HEALTH_STATUS=$(curl -s http://localhost/health.php | grep -o '"status":"[^"]*"' || echo 'FAIL')
+echo "Health: $HEALTH_STATUS"
+VERIFY_EOF
 chmod +x /usr/local/bin/verify-axialy-admin
 
 # Final test
