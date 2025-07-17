@@ -312,20 +312,20 @@ jobs:
         # Execute deployment on EC2
         ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key.pem ec2-user@$INSTANCE_IP << 'REMOTE_COMMANDS'
         
-        # Update system and install packages - FIXED for Amazon Linux 2023
+        # Update system and install packages - FINAL FIX for Amazon Linux 2023
         sudo dnf update -y
         sudo dnf install -y \
           httpd \
-          php8.2 \
-          php8.2-cli \
-          php8.2-fpm \
-          php8.2-mysqlnd \
-          php8.2-zip \
-          php8.2-xml \
-          php8.2-mbstring \
-          php8.2-curl \
-          php8.2-gd \
-          php8.2-opcache \
+          php \
+          php-cli \
+          php-fpm \
+          php-mysqlnd \
+          php-zip \
+          php-xml \
+          php-mbstring \
+          php-curl \
+          php-gd \
+          php-opcache \
           mariadb105 \
           unzip \
           wget \
@@ -334,7 +334,7 @@ jobs:
         # Enable mod_headers module for Apache
         echo "LoadModule headers_module modules/mod_headers.so" | sudo tee -a /etc/httpd/conf/httpd.conf
         
-        # Configure PHP for production (update path for AL2023)
+        # Configure PHP for production
         sudo tee /etc/php.ini > /dev/null << 'PHP_CONFIG'
         [PHP]
         memory_limit = 256M
@@ -359,7 +359,7 @@ jobs:
         sudo systemctl start php-fpm
         sudo systemctl enable php-fpm
         
-        # Configure Apache virtual host (simplified)
+        # Configure Apache virtual host
         sudo tee /etc/httpd/conf.d/axialy-admin.conf > /dev/null << 'APACHE_CONFIG'
         <VirtualHost *:80>
             DocumentRoot /var/www/html/axialy-admin
@@ -435,9 +435,9 @@ jobs:
         sudo mkdir -p /var/log/axialy-admin
         sudo chown apache:apache /var/log/axialy-admin
         
-        # Test database connection with correct PHP path
+        # Test database connection with standard PHP
         echo "Testing database connection..."
-        php8.2 -r "
+        php -r "
         require_once '/var/www/html/axialy-admin/includes/AdminDBConfig.php';
         use Axialy\AdminConfig\AdminDBConfig;
         try {
