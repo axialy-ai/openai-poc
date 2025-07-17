@@ -10,6 +10,14 @@ DB_PORT="${db_port}"
 DB_USER="${db_user}"
 DB_PASSWORD="${db_password}"
 DOMAIN_NAME="${domain_name}"
+ADMIN_DEFAULT_USER="${admin_default_user}"
+ADMIN_DEFAULT_EMAIL="${admin_default_email}"
+ADMIN_DEFAULT_PASSWORD="${admin_default_password}"
+SMTP_HOST="${smtp_host}"
+SMTP_PORT="${smtp_port}"
+SMTP_USER="${smtp_user}"
+SMTP_PASSWORD="${smtp_password}"
+SMTP_SECURE="${smtp_secure}"
 
 # Log everything
 exec > >(tee /var/log/user-data.log) 2>&1
@@ -41,7 +49,7 @@ dnf install -y \
   curl \
   git
 
-# Configure PHP
+# Configure PHP for production
 echo "Configuring PHP..."
 cat > /etc/php.ini << 'PHP_CONFIG'
 [PHP]
@@ -68,12 +76,12 @@ systemctl enable httpd
 systemctl start php-fpm
 systemctl enable php-fpm
 
-# Configure Apache
+# Configure Apache virtual host
 echo "Configuring Apache..."
-cat > /etc/httpd/conf.d/axialy-admin.conf << 'APACHE_CONFIG'
+cat > /etc/httpd/conf.d/axialy-admin.conf << APACHE_CONFIG
 <VirtualHost *:80>
     DocumentRoot /var/www/html/axialy-admin
-    ServerName ${domain_name}
+    ServerName ${DOMAIN_NAME:-admin.axialy.com}
     
     <Directory /var/www/html/axialy-admin>
         Options -Indexes +FollowSymLinks
@@ -108,14 +116,14 @@ APACHE_CONFIG
 echo "Setting up application directory..."
 mkdir -p /var/www/html/axialy-admin
 
-# Clone or download application files from GitHub
+# Download application files from GitHub
 echo "Downloading application files..."
 cd /tmp
 curl -L -o axialy-admin.zip "https://github.com/axialy-ai/openai-poc/archive/main.zip"
 unzip -q axialy-admin.zip
 cp -r openai-poc-main/axialy-admin-product/* /var/www/html/axialy-admin/
 
-# Create .env file
+# Create .env file with all configuration
 echo "Creating environment configuration..."
 cat > /var/www/html/axialy-admin/.env << ENV_CONFIG
 # Database Configuration (AWS RDS)
@@ -135,17 +143,24 @@ UI_DB_NAME=axialy_ui
 # Application Configuration
 APP_ENV=production
 APP_DEBUG=false
-APP_BASE_URL=http://$DOMAIN_NAME
+APP_BASE_URL=http://${DOMAIN_NAME:-$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)}
 
 # Session Configuration
 SESSION_LIFETIME=14400
 SESSION_SECURE=false
 SESSION_HTTPONLY=true
 
-# Admin Configuration (will be set from GitHub secrets in deployment)
-ADMIN_DEFAULT_USER=caseylide
-ADMIN_DEFAULT_EMAIL=caseylide@gmail.com
-ADMIN_DEFAULT_PASSWORD=Casellio
+# Admin Configuration
+ADMIN_DEFAULT_USER=$ADMIN_DEFAULT_USER
+ADMIN_DEFAULT_EMAIL=$ADMIN_DEFAULT_EMAIL
+ADMIN_DEFAULT_PASSWORD=$ADMIN_DEFAULT_PASSWORD
+
+# SMTP Configuration
+SMTP_HOST=$SMTP_HOST
+SMTP_PORT=$SMTP_PORT
+SMTP_USER=$SMTP_USER
+SMTP_PASSWORD=$SMTP_PASSWORD
+SMTP_SECURE=$SMTP_SECURE
 ENV_CONFIG
 
 # Create .htaccess for additional security
@@ -175,11 +190,45 @@ php_flag log_errors On
 php_value error_log /var/log/httpd/php-errors.log
 HTACCESS
 
-# Set permissions
+# Create health check endpoint
+cat > /var/www/html/axialy-admin/health.php << 'HEALTH_PHP'
+<?php
+header('Content-Type: application/json');
+
+$health = [
+    'status' => 'ok',
+    'timestamp' => date('c'),
+    'services' => []
+];
+
+// Check database connection
+try {
+    require_once __DIR__ . '/includes/AdminDBConfig.php';
+    use Axialy\AdminConfig\AdminDBConfig;
+    AdminDBConfig::getInstance()->getPdo();
+    $health['services']['database'] = 'ok';
+} catch (Exception $e) {
+    $health['services']['database'] = 'error';
+    $health['status'] = 'error';
+    $health['database_error'] = $e->getMessage();
+}
+
+// Check PHP
+$health['services']['php'] = 'ok';
+$health['php_version'] = PHP_VERSION;
+
+// Check Apache
+$health['services']['apache'] = 'ok';
+
+echo json_encode($health, JSON_PRETTY_PRINT);
+HEALTH_PHP
+
+# Set proper permissions
 echo "Setting file permissions..."
 chown -R apache:apache /var/www/html/axialy-admin
 chmod -R 755 /var/www/html/axialy-admin
 chmod 600 /var/www/html/axialy-admin/.env
+chmod 644 /var/www/html/axialy-admin/health.php
 
 # Create log directories
 mkdir -p /var/log/axialy-admin
@@ -217,6 +266,7 @@ systemctl is-active php-fpm || (echo "PHP-FPM failed to start" && exit 1)
 # Test HTTP response
 echo "Testing HTTP response..."
 sleep 5
+PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
 HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/admin_login.php || echo "000")
 if [ "$HTTP_STATUS" = "200" ]; then
     echo "✓ Application is responding correctly (HTTP $HTTP_STATUS)"
@@ -224,38 +274,5 @@ else
     echo "⚠ Application response status: HTTP $HTTP_STATUS"
 fi
 
-# Create a simple health check endpoint
-cat > /var/www/html/axialy-admin/health.php << 'HEALTH_PHP'
-<?php
-header('Content-Type: application/json');
-
-$health = [
-    'status' => 'ok',
-    'timestamp' => date('c'),
-    'services' => []
-];
-
-// Check database connection
-try {
-    require_once __DIR__ . '/includes/AdminDBConfig.php';
-    use Axialy\AdminConfig\AdminDBConfig;
-    AdminDBConfig::getInstance()->getPdo();
-    $health['services']['database'] = 'ok';
-} catch (Exception $e) {
-    $health['services']['database'] = 'error';
-    $health['status'] = 'error';
-}
-
-// Check PHP
-$health['services']['php'] = 'ok';
-$health['php_version'] = PHP_VERSION;
-
-echo json_encode($health, JSON_PRETTY_PRINT);
-HEALTH_PHP
-
-# Set permissions for health check
-chown apache:apache /var/www/html/axialy-admin/health.php
-chmod 644 /var/www/html/axialy-admin/health.php
-
 echo "✓ Axialy Admin server setup completed successfully at $(date)"
-echo "✓ Application should be accessible at http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)/admin_login.php"
+echo "✓ Application should be accessible at http://$PUBLIC_IP/admin_login.php"
