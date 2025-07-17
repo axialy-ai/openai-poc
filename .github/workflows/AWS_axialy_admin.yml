@@ -314,6 +314,7 @@ jobs:
         
         # Update system and install packages - FINAL FIX for Amazon Linux 2023
         sudo dnf update -y
+        # In the SSH deployment section, use these packages:
         sudo dnf install -y \
           httpd \
           php \
