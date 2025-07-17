@@ -311,7 +311,7 @@ locals {
     "echo 'Testing HTTP response...'",
     "sleep 5",
     "PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)",
-    "HTTP_STATUS=$(curl -s -o /dev/null -w '%{http_code}' http://localhost/admin_login.php || echo '000')",
+    "HTTP_STATUS=$(curl -s -o /dev/null -w '%%{http_code}' http://localhost/admin_login.php || echo '000')",
     "if [ \"$HTTP_STATUS\" = \"200\" ]; then",
     "    echo '✓ Application is responding correctly (HTTP '$HTTP_STATUS')'",
     "else",
