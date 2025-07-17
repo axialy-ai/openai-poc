@@ -1,260 +1,688 @@
-#!/bin/bash
-set -e
+- name: Checkout code
+      uses: actions/checkout@v4
 
-# Enhanced logging
-exec > >(tee /var/log/user-data.log) 2>&1
-echo "Starting Axialy Admin setup at $(date)"
-
-# Error handling
-error_exit() {
-    echo "ERROR: $1" >&2
-    exit 1
-}
-
-# Update and install packages
-echo "Installing packages..."
-dnf update -y || error_exit "Failed to update packages"
-dnf install -y httpd php php-cli php-fpm php-mysqlnd php-zip php-xml php-mbstring php-json php-curl php-gd php-opcache mysql unzip wget curl || error_exit "Failed to install packages"
-
-# Enable mod_headers
-echo "LoadModule headers_module modules/mod_headers.so" >> /etc/httpd/conf/httpd.conf
-
-# Create web directory
-mkdir -p /var/www/html/includes
-rm -rf /var/www/html/* 2>/dev/null || true
-
-# Create environment file
-cat > /var/www/html/.env << 'ENV_EOF'
-DB_HOST=${db_host}
-DB_PORT=${db_port}
-DB_USER=${db_user}
-DB_PASSWORD=${db_password}
-DB_NAME=axialy_admin
-UI_DB_HOST=${db_host}
-UI_DB_PORT=${db_port}
-UI_DB_USER=${db_user}
-UI_DB_PASSWORD=${db_password}
-UI_DB_NAME=axialy_ui
-ADMIN_DEFAULT_USER=${admin_default_user}
-ADMIN_DEFAULT_EMAIL=${admin_default_email}
-ADMIN_DEFAULT_PASSWORD=${admin_default_password}
-SMTP_HOST=${smtp_host}
-SMTP_PORT=${smtp_port}
-SMTP_USER=${smtp_user}
-SMTP_PASSWORD=${smtp_password}
-SMTP_SECURE=${smtp_secure}
-ENV_EOF
-
-# Create AdminDBConfig.php (compact version)
-cat > /var/www/html/includes/AdminDBConfig.php << 'PHP_EOF'
-<?php
-namespace Axialy\AdminConfig;
-use PDO, RuntimeException;
-final class AdminDBConfig {
-    private const REQUIRED_VARS = ['DB_HOST','DB_USER','DB_PASSWORD'];
-    private static ?self $instance = null;
-    private string $host, $user, $password, $port, $nameAdmin, $nameUI;
-    private array $pdoPool = [];
-    public static function getInstance(): self { return self::$instance ??= new self(); }
-    private function __construct() {
-        $this->loadEnv();
-        foreach (self::REQUIRED_VARS as $k) {
-            if (!getenv($k)) throw new RuntimeException("Missing $k");
+    - name: Create user_data.sh template file
+      working-directory: infra/aws_admin
+      run: |
+        cat > user_data.sh << 'USER_DATA_EOF'
+        #!/bin/bash
+        set -e
+        
+        # Enhanced logging
+        exec > >(tee /var/log/user-data.log) 2>&1
+        echo "Starting Axialy Admin setup at $(date)"
+        
+        # Error handling
+        error_exit() {
+            echo "ERROR: $1" >&2
+            exit 1
         }
-        $this->host = getenv('DB_HOST'); $this->user = getenv('DB_USER'); $this->password = getenv('DB_PASSWORD');
-        $this->port = getenv('DB_PORT') ?: '3306'; $this->nameAdmin = 'axialy_admin'; $this->nameUI = 'axialy_ui';
-    }
-    public function getPdo(): PDO { return $this->getPdoFor($this->nameAdmin); }
-    public function getPdoFor(string $dbName): PDO {
-        if (!isset($this->pdoPool[$dbName])) {
-            $dsn = "mysql:host={$this->host};port={$this->port};dbname=$dbName;charset=utf8mb4";
-            $pdo = new PDO($dsn, $this->user, $this->password, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-            if ($dbName === $this->nameAdmin) $this->ensureSchema($pdo);
-            $this->pdoPool[$dbName] = $pdo;
-        }
-        return $this->pdoPool[$dbName];
-    }
-    private function ensureSchema(PDO $pdo): void {
-        $pdo->exec("CREATE TABLE IF NOT EXISTS admin_users (id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, username VARCHAR(50) NOT NULL UNIQUE, password VARCHAR(255) NOT NULL, email VARCHAR(255) NOT NULL, is_active TINYINT(1) DEFAULT 1, is_sys_admin TINYINT(1) DEFAULT 1, created_at DATETIME DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB");
-        $pdo->exec("CREATE TABLE IF NOT EXISTS admin_user_sessions (id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, admin_user_id INT UNSIGNED NOT NULL, session_token CHAR(64) NOT NULL UNIQUE, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, expires_at DATETIME NOT NULL, KEY(admin_user_id), FOREIGN KEY (admin_user_id) REFERENCES admin_users(id) ON DELETE CASCADE) ENGINE=InnoDB");
-    }
-    private function loadEnv(): void {
-        $env = __DIR__ . '/../.env';
-        if (file_exists($env)) {
-            foreach (file($env, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
-                if ($line[0] !== '#' && strpos($line, '=') !== false) {
-                    [$key, $value] = explode('=', $line, 2);
-                    putenv(trim($key) . '=' . trim($value));
+        
+        # Update and install packages
+        echo "Installing packages..."
+        dnf update -y || error_exit "Failed to update packages"
+        dnf install -y httpd php php-cli php-fpm php-mysqlnd php-zip php-xml php-mbstring php-json php-curl php-gd php-opcache mysql unzip wget curl || error_exit "Failed to install packages"
+        
+        # Enable mod_headers
+        echo "LoadModule headers_module modules/mod_headers.so" >> /etc/httpd/conf/httpd.conf
+        
+        # Create web directory
+        mkdir -p /var/www/html/includes
+        rm -rf /var/www/html/* 2>/dev/null || true
+        
+        # Create environment file
+        cat > /var/www/html/.env << 'ENV_EOF'
+        DB_HOST=${db_host}
+        DB_PORT=${db_port}
+        DB_USER=${db_user}
+        DB_PASSWORD=${db_password}
+        DB_NAME=axialy_admin
+        UI_DB_HOST=${db_host}
+        UI_DB_PORT=${db_port}
+        UI_DB_USER=${db_user}
+        UI_DB_PASSWORD=${db_password}
+        UI_DB_NAME=axialy_ui
+        ADMIN_DEFAULT_USER=${admin_default_user}
+        ADMIN_DEFAULT_EMAIL=${admin_default_email}
+        ADMIN_DEFAULT_PASSWORD=${admin_default_password}
+        SMTP_HOST=${smtp_host}
+        SMTP_PORT=${smtp_port}
+        SMTP_USER=${smtp_user}
+        SMTP_PASSWORD=${smtp_password}
+        SMTP_SECURE=${smtp_secure}
+        ENV_EOF
+        
+        # Create AdminDBConfig.php (compact version)
+        cat > /var/www/html/includes/AdminDBConfig.php << 'PHP_EOF'
+        <?php
+        namespace Axialy\AdminConfig;
+        use PDO, RuntimeException;
+        final class AdminDBConfig {
+            private const REQUIRED_VARS = ['DB_HOST','DB_USER','DB_PASSWORD'];
+            private static ?self $instance = null;
+            private string $host, $user, $password, $port, $nameAdmin, $nameUI;
+            private array $pdoPool = [];
+            public static function getInstance(): self { return self::$instance ??= new self(); }
+            private function __construct() {
+                $this->loadEnv();
+                foreach (self::REQUIRED_VARS as $k) {
+                    if (!getenv($k)) throw new RuntimeException("Missing $k");
+                }
+                $this->host = getenv('DB_HOST'); $this->user = getenv('DB_USER'); $this->password = getenv('DB_PASSWORD');
+                $this->port = getenv('DB_PORT') ?: '3306'; $this->nameAdmin = 'axialy_admin'; $this->nameUI = 'axialy_ui';
+            }
+            public function getPdo(): PDO { return $this->getPdoFor($this->nameAdmin); }
+            public function getPdoFor(string $dbName): PDO {
+                if (!isset($this->pdoPool[$dbName])) {
+                    $dsn = "mysql:host={$this->host};port={$this->port};dbname=$dbName;charset=utf8mb4";
+                    $pdo = new PDO($dsn, $this->user, $this->password, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+                    if ($dbName === $this->nameAdmin) $this->ensureSchema($pdo);
+                    $this->pdoPool[$dbName] = $pdo;
+                }
+                return $this->pdoPool[$dbName];
+            }
+            private function ensureSchema(PDO $pdo): void {
+                $pdo->exec("CREATE TABLE IF NOT EXISTS admin_users (id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, username VARCHAR(50) NOT NULL UNIQUE, password VARCHAR(255) NOT NULL, email VARCHAR(255) NOT NULL, is_active TINYINT(1) DEFAULT 1, is_sys_admin TINYINT(1) DEFAULT 1, created_at DATETIME DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB");
+                $pdo->exec("CREATE TABLE IF NOT EXISTS admin_user_sessions (id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, admin_user_id INT UNSIGNED NOT NULL, session_token CHAR(64) NOT NULL UNIQUE, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, expires_at DATETIME NOT NULL, KEY(admin_user_id), FOREIGN KEY (admin_user_id) REFERENCES admin_users(id) ON DELETE CASCADE) ENGINE=InnoDB");
+            }
+            private function loadEnv(): void {
+                $env = __DIR__ . '/../.env';
+                if (file_exists($env)) {
+                    foreach (file($env, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+                        if ($line[0] !== '#' && strpos($line, '=') !== false) {
+                            [$key, $value] = explode('=', $line, 2);
+                            putenv(trim($key) . '=' . trim($value));
+                        }
+                    }
                 }
             }
         }
-    }
-}
-PHP_EOF
-
-# Create admin_auth.php
-cat > /var/www/html/includes/admin_auth.php << 'AUTH_EOF'
-<?php
-require_once __DIR__ . '/AdminDBConfig.php';
-use Axialy\AdminConfig\AdminDBConfig;
-function requireAdminAuth() {
-    if (session_status() === PHP_SESSION_NONE) session_start();
-    if (empty($_SESSION['admin_user_id']) || empty($_SESSION['admin_session_token'])) {
-        header('Location: /admin_login.php'); exit;
-    }
-    $db = AdminDBConfig::getInstance()->getPdo();
-    $stmt = $db->prepare("SELECT u.is_active FROM admin_user_sessions s JOIN admin_users u ON s.admin_user_id = u.id WHERE s.admin_user_id = ? AND s.session_token = ? AND s.expires_at > NOW()");
-    $stmt->execute([$_SESSION['admin_user_id'], $_SESSION['admin_session_token']]);
-    if (!$stmt->fetch() || !$stmt->fetchColumn()) {
-        session_destroy(); header('Location: /admin_login.php'); exit;
-    }
-}
-AUTH_EOF
-
-# Create admin_login.php
-cat > /var/www/html/admin_login.php << 'LOGIN_EOF'
-<?php
-session_start();
-require_once __DIR__ . '/includes/AdminDBConfig.php';
-use Axialy\AdminConfig\AdminDBConfig;
-$error = '';
-if ($_POST) {
-    $username = trim($_POST['username'] ?? '');
-    $password = trim($_POST['password'] ?? '');
-    if ($username && $password) {
-        try {
-            $db = AdminDBConfig::getInstance()->getPdo();
-            $stmt = $db->prepare("SELECT * FROM admin_users WHERE username = ? AND is_active = 1");
-            $stmt->execute([$username]);
-            $user = $stmt->fetch();
-            if ($user && password_verify($password, $user['password'])) {
-                $db->prepare("DELETE FROM admin_user_sessions WHERE admin_user_id = ?")->execute([$user['id']]);
-                $token = bin2hex(random_bytes(32));
-                $db->prepare("INSERT INTO admin_user_sessions (admin_user_id, session_token, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 4 HOUR))")->execute([$user['id'], $token]);
-                $_SESSION['admin_user_id'] = $user['id']; $_SESSION['admin_session_token'] = $token;
-                header('Location: index.php'); exit;
+        PHP_EOF
+        
+        # Create admin_auth.php
+        cat > /var/www/html/includes/admin_auth.php << 'AUTH_EOF'
+        <?php
+        require_once __DIR__ . '/AdminDBConfig.php';
+        use Axialy\AdminConfig\AdminDBConfig;
+        function requireAdminAuth() {
+            if (session_status() === PHP_SESSION_NONE) session_start();
+            if (empty($_SESSION['admin_user_id']) || empty($_SESSION['admin_session_token'])) {
+                header('Location: /admin_login.php'); exit;
             }
-        } catch (Exception $e) { error_log($e->getMessage()); }
-        $error = 'Invalid credentials';
-    } else $error = 'Please enter username and password';
-}
-?><!DOCTYPE html><html><head><title>Axialy Admin Login</title><style>body{font-family:sans-serif;max-width:400px;margin:50px auto;padding:20px}.error{color:red;margin-bottom:1em}input{width:100%;padding:8px;margin:5px 0;box-sizing:border-box}button{width:100%;padding:10px;background:#007BFF;color:white;border:none;cursor:pointer}</style></head><body><h2>Axialy Admin Login</h2><?php if($error): ?><div class="error"><?= htmlspecialchars($error) ?></div><?php endif; ?><form method="post"><input type="text" name="username" placeholder="Username" required autofocus><input type="password" name="password" placeholder="Password" required><button type="submit">Login</button></form></body></html>
-LOGIN_EOF
+            $db = AdminDBConfig::getInstance()->getPdo();
+            $stmt = $db->prepare("SELECT u.is_active FROM admin_user_sessions s JOIN admin_users u ON s.admin_user_id = u.id WHERE s.admin_user_id = ? AND s.session_token = ? AND s.expires_at > NOW()");
+            $stmt->execute([$_SESSION['admin_user_id'], $_SESSION['admin_session_token']]);
+            if (!$stmt->fetch() || !$stmt->fetchColumn()) {
+                session_destroy(); header('Location: /admin_login.php'); exit;
+            }
+        }
+        AUTH_EOF
+        
+        # Create admin_login.php
+        cat > /var/www/html/admin_login.php << 'LOGIN_EOF'
+        <?php
+        session_start();
+        require_once __DIR__ . '/includes/AdminDBConfig.php';
+        use Axialy\AdminConfig\AdminDBConfig;
+        $error = '';
+        if ($_POST) {
+            $username = trim($_POST['username'] ?? '');
+            $password = trim($_POST['password'] ?? '');
+            if ($username && $password) {
+                try {
+                    $db = AdminDBConfig::getInstance()->getPdo();
+                    $stmt = $db->prepare("SELECT * FROM admin_users WHERE username = ? AND is_active = 1");
+                    $stmt->execute([$username]);
+                    $user = $stmt->fetch();
+                    if ($user && password_verify($password, $user['password'])) {
+                        $db->prepare("DELETE FROM admin_user_sessions WHERE admin_user_id = ?")->execute([$user['id']]);
+                        $token = bin2hex(random_bytes(32));
+                        $db->prepare("INSERT INTO admin_user_sessions (admin_user_id, session_token, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 4 HOUR))")->execute([$user['id'], $token]);
+                        $_SESSION['admin_user_id'] = $user['id']; $_SESSION['admin_session_token'] = $token;
+                        header('Location: index.php'); exit;
+                    }
+                } catch (Exception $e) { error_log($e->getMessage()); }
+                $error = 'Invalid credentials';
+            } else $error = 'Please enter username and password';
+        }
+        ?><!DOCTYPE html><html><head><title>Axialy Admin Login</title><style>body{font-family:sans-serif;max-width:400px;margin:50px auto;padding:20px}.error{color:red;margin-bottom:1em}input{width:100%;padding:8px;margin:5px 0;box-sizing:border-box}button{width:100%;padding:10px;background:#007BFF;color:white;border:none;cursor:pointer}</style></head><body><h2>Axialy Admin Login</h2><?php if($error): ?><div class="error"><?= htmlspecialchars($error) ?></div><?php endif; ?><form method="post"><input type="text" name="username" placeholder="Username" required autofocus><input type="password" name="password" placeholder="Password" required><button type="submit">Login</button></form></body></html>
+        LOGIN_EOF
+        
+        # Create index.php
+        cat > /var/www/html/index.php << 'INDEX_EOF'
+        <?php
+        session_start();
+        require_once __DIR__ . '/includes/AdminDBConfig.php';
+        use Axialy\AdminConfig\AdminDBConfig;
+        
+        // Check if initial user exists
+        $db = AdminDBConfig::getInstance()->getPdo();
+        $stmt = $db->prepare("SELECT COUNT(*) FROM admin_users WHERE username = 'caseylide'");
+        $stmt->execute();
+        if (!$stmt->fetchColumn()) {
+            if ($_POST && ($_POST['init_code'] ?? '') === 'Casellio') {
+                $hash = password_hash('Casellio', PASSWORD_DEFAULT);
+                $db->prepare("INSERT INTO admin_users (username, password, email) VALUES ('caseylide', ?, 'caseylide@gmail.com')")->execute([$hash]);
+                header('Location: admin_login.php'); exit;
+            }
+            echo '<!DOCTYPE html><html><head><title>Setup</title></head><body><h2>Initial Setup</h2><form method="post"><input type="password" name="init_code" placeholder="Admin code" required><button type="submit">Initialize</button></form></body></html>';
+            exit;
+        }
+        
+        require_once __DIR__ . '/includes/admin_auth.php';
+        requireAdminAuth();
+        ?><!DOCTYPE html><html><head><title>Axialy Admin</title><style>body{font-family:sans-serif;max-width:800px;margin:30px auto;padding:20px}</style></head><body><h1>Axialy Admin Dashboard</h1><p>Welcome to the administration panel.</p><p><a href="admin_login.php?logout=1">Logout</a></p></body></html>
+        INDEX_EOF
+        
+        # Create health.php
+        cat > /var/www/html/health.php << 'HEALTH_EOF'
+        <?php
+        header('Content-Type: application/json');
+        $health = ['status' => 'ok', 'timestamp' => date('c')];
+        try {
+            require_once __DIR__ . '/includes/AdminDBConfig.php';
+            use Axialy\AdminConfig\AdminDBConfig;
+            AdminDBConfig::getInstance()->getPdo();
+            $health['database'] = 'name: AWS Axialy Admin Deployment (Improved)
 
-# Create index.php
-cat > /var/www/html/index.php << 'INDEX_EOF'
-<?php
-session_start();
-require_once __DIR__ . '/includes/AdminDBConfig.php';
-use Axialy\AdminConfig\AdminDBConfig;
+on:
+  workflow_dispatch:
+    inputs:
+      instance_identifier:
+        description: "EC2 instance identifier"
+        required: true
+        default: "axialy-admin"
+      aws_region:
+        description: "AWS region (e.g. us-west-2, us-east-1)"
+        default: "us-west-2"
+        required: true
+      instance_type:
+        description: "EC2 instance type"
+        default: "t3.micro"
+        required: true
+      domain_name:
+        description: "Optional domain name for admin interface"
+        required: false
+        default: ""
 
-// Check if initial user exists
-$db = AdminDBConfig::getInstance()->getPdo();
-$stmt = $db->prepare("SELECT COUNT(*) FROM admin_users WHERE username = 'caseylide'");
-$stmt->execute();
-if (!$stmt->fetchColumn()) {
-    if ($_POST && ($_POST['init_code'] ?? '') === 'Casellio') {
-        $hash = password_hash('Casellio', PASSWORD_DEFAULT);
-        $db->prepare("INSERT INTO admin_users (username, password, email) VALUES ('caseylide', ?, 'caseylide@gmail.com')")->execute([$hash]);
-        header('Location: admin_login.php'); exit;
-    }
-    echo '<!DOCTYPE html><html><head><title>Setup</title></head><body><h2>Initial Setup</h2><form method="post"><input type="password" name="init_code" placeholder="Admin code" required><button type="submit">Initialize</button></form></body></html>';
-    exit;
-}
+env:
+  AWS_DEFAULT_REGION: ${{ github.event.inputs.aws_region }}
+  INSTANCE_IDENTIFIER: ${{ github.event.inputs.instance_identifier }}
 
-require_once __DIR__ . '/includes/admin_auth.php';
-requireAdminAuth();
-?><!DOCTYPE html><html><head><title>Axialy Admin</title><style>body{font-family:sans-serif;max-width:800px;margin:30px auto;padding:20px}</style></head><body><h1>Axialy Admin Dashboard</h1><p>Welcome to the administration panel.</p><p><a href="admin_login.php?logout=1">Logout</a></p></body></html>
-INDEX_EOF
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    name: Prepare AWS Environment
+    outputs:
+      cleanup_needed: ${{ steps.check_resources.outputs.cleanup_needed }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-# Create health.php
-cat > /var/www/html/health.php << 'HEALTH_EOF'
-<?php
-header('Content-Type: application/json');
-$health = ['status' => 'ok', 'timestamp' => date('c')];
-try {
-    require_once __DIR__ . '/includes/AdminDBConfig.php';
-    use Axialy\AdminConfig\AdminDBConfig;
-    AdminDBConfig::getInstance()->getPdo();
-    $health['database'] = 'ok';
-} catch (Exception $e) {
-    $health['status'] = 'error';
-    $health['database'] = 'error';
-}
-echo json_encode($health);
-HEALTH_EOF
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ github.event.inputs.aws_region }}
 
-# Configure PHP
-cat > /etc/php.ini << 'PHP_INI'
-[PHP]
-memory_limit = 256M
-upload_max_filesize = 50M
-post_max_size = 50M
-max_execution_time = 300
-session.cookie_httponly = 1
-expose_php = Off
-display_errors = Off
-log_errors = On
-error_log = /var/log/php-errors.log
-date.timezone = UTC
-PHP_INI
+    - name: Check for existing resources
+      id: check_resources
+      run: |
+        echo "Checking for existing EC2 instance..."
+        EXISTING_INSTANCES=$(aws ec2 describe-instances \
+          --filters "Name=tag:Name,Values=${{ env.INSTANCE_IDENTIFIER }}" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
+          --query 'Reservations[].Instances[].InstanceId' --output text || echo "")
+        
+        if [ -n "$EXISTING_INSTANCES" ]; then
+          echo "cleanup_needed=true" >> $GITHUB_OUTPUT
+          echo "Existing instances found - cleanup will be performed"
+        else
+          echo "cleanup_needed=false" >> $GITHUB_OUTPUT
+          echo "No existing instances found - proceeding with fresh deployment"
+        fi
 
-# Configure Apache
-cat > /etc/httpd/conf.d/axialy-admin.conf << 'APACHE_EOF'
-<VirtualHost *:80>
-    DocumentRoot /var/www/html
-    DirectoryIndex index.php admin_login.php
-    <Directory /var/www/html>
-        Options -Indexes +FollowSymLinks
-        AllowOverride All
-        Require all granted
-    </Directory>
-    <FilesMatch \.php$>
-        SetHandler "proxy:unix:/run/php-fpm/www.sock|fcgi://localhost"
-    </FilesMatch>
-    ErrorLog /var/log/httpd/axialy-admin-error.log
-    CustomLog /var/log/httpd/axialy-admin-access.log combined
-</VirtualHost>
-APACHE_EOF
+    - name: Cleanup existing resources
+      if: steps.check_resources.outputs.cleanup_needed == 'true'
+      run: |
+        echo "Cleaning up existing EC2 instances..."
+        EXISTING_INSTANCES=$(aws ec2 describe-instances \
+          --filters "Name=tag:Name,Values=${{ env.INSTANCE_IDENTIFIER }}" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
+          --query 'Reservations[].Instances[].InstanceId' --output text)
+        
+        if [ -n "$EXISTING_INSTANCES" ]; then
+          echo "Terminating instances: $EXISTING_INSTANCES"
+          aws ec2 terminate-instances --instance-ids $EXISTING_INSTANCES || true
+          aws ec2 wait instance-terminated --instance-ids $EXISTING_INSTANCES || true
+        fi
+        
+        # Cleanup security groups
+        SG_NAME="${{ env.INSTANCE_IDENTIFIER }}-sg"
+        SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$SG_NAME" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo "None")
+        if [ "$SG_ID" != "None" ] && [ "$SG_ID" != "" ]; then
+          echo "Deleting security group $SG_ID..."
+          aws ec2 delete-security-group --group-id "$SG_ID" || true
+        fi
+        
+        # Cleanup CloudWatch log groups
+        LOG_GROUP="/aws/ec2/${{ env.INSTANCE_IDENTIFIER }}"
+        if aws logs describe-log-groups --log-group-name-prefix "$LOG_GROUP" --query 'logGroups[0].logGroupName' --output text 2>/dev/null | grep -q "$LOG_GROUP"; then
+          echo "Deleting log group $LOG_GROUP..."
+          aws logs delete-log-group --log-group-name "$LOG_GROUP" || true
+        fi
+        
+        echo "✓ Comprehensive cleanup completed"
 
-# Set permissions
-chown -R apache:apache /var/www/html
-chmod -R 755 /var/www/html
-chmod 600 /var/www/html/.env
+  validate_database:
+    runs-on: ubuntu-latest
+    name: Validate Database Connection
+    needs: prepare
+    outputs:
+      db_validation: ${{ steps.test_db.outputs.status }}
+    
+    steps:
+    - name: Install MySQL Client
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y mysql-client-8.0
 
-# Start services
-systemctl start httpd php-fpm
-systemctl enable httpd php-fpm
+    - name: Test database connectivity
+      id: test_db
+      env:
+        DB_HOST: ${{ secrets.DB_HOST }}
+        DB_PORT: ${{ secrets.DB_PORT }}
+        DB_USER: ${{ secrets.DB_USER }}
+        DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      run: |
+        echo "Testing database connection..."
+        
+        if [ -z "$DB_HOST" ] || [ -z "$DB_USER" ] || [ -z "$DB_PASSWORD" ]; then
+          echo "status=failed" >> $GITHUB_OUTPUT
+          echo "ERROR: Missing database credentials in GitHub secrets"
+          exit 1
+        fi
+        
+        # Test connection to both databases
+        for db in axialy_admin axialy_ui; do
+          echo "Testing connection to $db database..."
+          if mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" \
+              --ssl-mode=REQUIRED \
+              --connect-timeout=10 \
+              -e "USE $db; SELECT 1;" 2>/dev/null; then
+            echo "✓ Connection to $db successful"
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+            echo "ERROR: Cannot connect to $db database"
+            exit 1
+          fi
+        done
+        
+        echo "status=success" >> $GITHUB_OUTPUT
+        echo "✓ All database connections validated"
 
-# Create verification script
-cat > /usr/local/bin/verify-axialy-admin << 'VERIFY_EOF'
-#!/bin/bash
-echo "=== Axialy Admin Status ==="
-echo "Apache: $(systemctl is-active httpd)"
-echo "PHP-FPM: $(systemctl is-active php-fpm)"
-echo "HTTP Test: $(curl -s -o /dev/null -w '%{http_code}' http://localhost/admin_login.php || echo 'FAIL')"
-echo "Health: $(curl -s http://localhost/health.php | grep -o '"status":"[^"]*"' || echo 'FAIL')"
-VERIFY_EOF
-chmod +x /usr/local/bin/verify-axialy-admin
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy EC2 and Configure Admin Application
+    needs: [prepare, validate_database]
+    outputs:
+      instance_id: ${{ steps.deploy_ec2.outputs.instance_id }}
+      instance_ip: ${{ steps.deploy_ec2.outputs.instance_ip }}
+      security_group_id: ${{ steps.deploy_ec2.outputs.security_group_id }}
+      admin_url: ${{ steps.deploy_ec2.outputs.admin_url }}
 
-# Test database connection
-echo "Testing database connection..."
-php -r "
-require_once '/var/www/html/includes/AdminDBConfig.php';
-use Axialy\AdminConfig\AdminDBConfig;
-try {
-    AdminDBConfig::getInstance()->getPdo();
-    echo 'Database: OK' . PHP_EOL;
-} catch (Exception \$e) {
-    echo 'Database: ERROR - ' . \$e->getMessage() . PHP_EOL;
-    exit(1);
-}
-"
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-# Final setup
-sleep 5
-PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 || echo 'localhost')
-echo "=== Setup Complete ==="
-echo "Access: http://$PUBLIC_IP/admin_login.php"
-echo "Status: $(/usr/local/bin/verify-axialy-admin)"
-echo "Setup completed at $(date)"
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ github.event.inputs.aws_region }}
+
+    - name: Wait for cleanup completion
+      run: |
+        echo "Waiting 30 seconds for AWS resource cleanup to propagate..."
+        sleep 30
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.6.6
+        terraform_wrapper: false
+
+    - name: Terraform Init
+      working-directory: infra/aws_admin
+      run: terraform init
+
+    - name: Terraform Plan
+      working-directory: infra/aws_admin
+      run: |
+        terraform plan \
+          -var="instance_identifier=${{ env.INSTANCE_IDENTIFIER }}" \
+          -var="aws_region=${{ github.event.inputs.aws_region }}" \
+          -var="instance_type=${{ github.event.inputs.instance_type }}" \
+          -var="domain_name=${{ github.event.inputs.domain_name }}" \
+          -var="key_pair_name=${{ secrets.EC2_KEY_PAIR }}" \
+          -var="elastic_ip_allocation_id=${{ secrets.EC2_ELASTIC_IP_ALLOCATION_ID }}" \
+          -var="db_host=${{ secrets.DB_HOST }}" \
+          -var="db_port=${{ secrets.DB_PORT }}" \
+          -var="db_user=${{ secrets.DB_USER }}" \
+          -var="db_password=${{ secrets.DB_PASSWORD }}" \
+          -var="admin_default_user=${{ secrets.ADMIN_DEFAULT_USER }}" \
+          -var="admin_default_email=${{ secrets.ADMIN_DEFAULT_EMAIL }}" \
+          -var="admin_default_password=${{ secrets.ADMIN_DEFAULT_PASSWORD }}" \
+          -var="smtp_host=${{ secrets.SMTP_HOST }}" \
+          -var="smtp_port=${{ secrets.SMTP_PORT }}" \
+          -var="smtp_user=${{ secrets.SMTP_USER }}" \
+          -var="smtp_password=${{ secrets.SMTP_PASSWORD }}" \
+          -var="smtp_secure=${{ secrets.SMTP_SECURE }}"
+
+    - name: Terraform Apply
+      id: deploy_ec2
+      working-directory: infra/aws_admin
+      run: |
+        terraform apply -auto-approve \
+          -var="instance_identifier=${{ env.INSTANCE_IDENTIFIER }}" \
+          -var="aws_region=${{ github.event.inputs.aws_region }}" \
+          -var="instance_type=${{ github.event.inputs.instance_type }}" \
+          -var="domain_name=${{ github.event.inputs.domain_name }}" \
+          -var="key_pair_name=${{ secrets.EC2_KEY_PAIR }}" \
+          -var="elastic_ip_allocation_id=${{ secrets.EC2_ELASTIC_IP_ALLOCATION_ID }}" \
+          -var="db_host=${{ secrets.DB_HOST }}" \
+          -var="db_port=${{ secrets.DB_PORT }}" \
+          -var="db_user=${{ secrets.DB_USER }}" \
+          -var="db_password=${{ secrets.DB_PASSWORD }}" \
+          -var="admin_default_user=${{ secrets.ADMIN_DEFAULT_USER }}" \
+          -var="admin_default_email=${{ secrets.ADMIN_DEFAULT_EMAIL }}" \
+          -var="admin_default_password=${{ secrets.ADMIN_DEFAULT_PASSWORD }}" \
+          -var="smtp_host=${{ secrets.SMTP_HOST }}" \
+          -var="smtp_port=${{ secrets.SMTP_PORT }}" \
+          -var="smtp_user=${{ secrets.SMTP_USER }}" \
+          -var="smtp_password=${{ secrets.SMTP_PASSWORD }}" \
+          -var="smtp_secure=${{ secrets.SMTP_SECURE }}"
+
+        echo "instance_id=$(terraform output -raw instance_id)" >> $GITHUB_OUTPUT
+        echo "instance_ip=$(terraform output -raw instance_ip)" >> $GITHUB_OUTPUT
+        echo "security_group_id=$(terraform output -raw security_group_id)" >> $GITHUB_OUTPUT
+        echo "admin_url=$(terraform output -raw admin_url)" >> $GITHUB_OUTPUT
+
+    - name: Wait for instance to be ready
+      run: |
+        echo "Waiting for EC2 instance to be running..."
+        aws ec2 wait instance-running --instance-ids ${{ steps.deploy_ec2.outputs.instance_id }}
+        echo "EC2 instance is running"
+        
+        # Wait additional time for user data script to complete
+        echo "Waiting 5 minutes for user data script to complete setup..."
+        sleep 300
+
+  test_deployment:
+    runs-on: ubuntu-latest
+    name: Test Application Deployment
+    needs: deploy
+    outputs:
+      test_results: ${{ steps.test_app.outputs.results }}
+
+    steps:
+    - name: Test application endpoints
+      id: test_app
+      env:
+        INSTANCE_IP: ${{ needs.deploy.outputs.instance_ip }}
+        ADMIN_URL: ${{ needs.deploy.outputs.admin_url }}
+      run: |
+        echo "Testing application deployment..."
+        
+        # Function to test HTTP endpoint
+        test_endpoint() {
+          local url=$1
+          local name=$2
+          local expected_status=${3:-200}
+          
+          echo "Testing $name at $url..."
+          status=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 10 --max-time 30 "$url" 2>/dev/null || echo "000")
+          
+          if [ "$status" = "$expected_status" ]; then
+            echo "✓ $name: HTTP $status (SUCCESS)"
+            return 0
+          else
+            echo "⚠ $name: HTTP $status (Expected $expected_status)"
+            return 1
+          fi
+        }
+        
+        # Wait for services to be fully ready
+        echo "Waiting for services to be fully ready..."
+        sleep 60
+        
+        # Test endpoints
+        results=""
+        
+        if test_endpoint "http://$INSTANCE_IP/health.php" "Health Check"; then
+          results="${results}health:ok,"
+        else
+          results="${results}health:fail,"
+        fi
+        
+        if test_endpoint "http://$INSTANCE_IP/admin_login.php" "Admin Login Page"; then
+          results="${results}login:ok,"
+        else
+          results="${results}login:fail,"
+        fi
+        
+        if test_endpoint "http://$INSTANCE_IP/index.php" "Main Dashboard" "302"; then
+          results="${results}dashboard:ok,"
+        else
+          results="${results}dashboard:fail,"
+        fi
+        
+        # Test if content is actually loading
+        echo "Testing page content..."
+        if curl -s "http://$INSTANCE_IP/admin_login.php" | grep -q "Admin Login"; then
+          echo "✓ Login page content is loading correctly"
+          results="${results}content:ok"
+        else
+          echo "⚠ Login page content issue detected"
+          results="${results}content:fail"
+        fi
+        
+        echo "results=$results" >> $GITHUB_OUTPUT
+        
+        # Additional diagnostics if tests fail
+        if echo "$results" | grep -q "fail"; then
+          echo ""
+          echo "=== DIAGNOSTIC INFORMATION ==="
+          echo "Testing basic connectivity..."
+          curl -v "http://$INSTANCE_IP/" 2>&1 | head -20 || true
+        fi
+
+    - name: SSH Diagnostics (if tests fail)
+      if: contains(steps.test_app.outputs.results, 'fail')
+      env:
+        INSTANCE_IP: ${{ needs.deploy.outputs.instance_ip }}
+      run: |
+        echo "=== SSH DIAGNOSTICS ==="
+        
+        # Create temporary key file
+        echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > /tmp/ec2_key.pem
+        chmod 600 /tmp/ec2_key.pem
+        
+        # Wait for SSH to be available
+        for i in {1..10}; do
+          if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i /tmp/ec2_key.pem ec2-user@$INSTANCE_IP "echo 'SSH ready'" 2>/dev/null; then
+            echo "SSH is ready"
+            break
+          fi
+          echo "SSH not ready, waiting... (attempt $i/10)"
+          sleep 10
+        done
+        
+        # Run diagnostics
+        ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key.pem ec2-user@$INSTANCE_IP << 'REMOTE_DIAGNOSTICS'
+        echo "=== System Status ==="
+        systemctl status httpd --no-pager
+        systemctl status php-fpm --no-pager
+        
+        echo ""
+        echo "=== Apache Error Logs (last 20 lines) ==="
+        sudo tail -20 /var/log/httpd/error_log || echo "No Apache error log found"
+        
+        echo ""
+        echo "=== PHP Error Logs (last 20 lines) ==="
+        sudo tail -20 /var/log/php-errors.log || echo "No PHP error log found"
+        
+        echo ""
+        echo "=== User Data Script Log (last 30 lines) ==="
+        sudo tail -30 /var/log/user-data.log || echo "No user data log found"
+        
+        echo ""
+        echo "=== File Permissions ==="
+        ls -la /var/www/html/
+        
+        echo ""
+        echo "=== Test Local HTTP ==="
+        curl -I http://localhost/admin_login.php 2>&1 || echo "Local HTTP test failed"
+        
+        echo ""
+        echo "=== Apache Configuration Test ==="
+        sudo httpd -t || echo "Apache config test failed"
+        
+        echo ""
+        echo "=== PHP Test ==="
+        php -v || echo "PHP test failed"
+        
+        echo ""
+        echo "=== Database Connection Test ==="
+        php -r "
+        require_once '/var/www/html/includes/AdminDBConfig.php';
+        use Axialy\\AdminConfig\\AdminDBConfig;
+        try {
+            AdminDBConfig::getInstance()->getPdo();
+            echo 'Database connection: OK' . PHP_EOL;
+        } catch (Exception \$e) {
+            echo 'Database connection: FAILED - ' . \$e->getMessage() . PHP_EOL;
+        }
+        " || echo "Database test script failed"
+        
+        REMOTE_DIAGNOSTICS
+        
+        # Clean up the temporary key file
+        rm -f /tmp/ec2_key.pem
+
+    - name: Save deployment info as repository secrets
+      env:
+        GH_TOKEN: ${{ secrets.GH_PAT }}
+        INSTANCE_ID: ${{ needs.deploy.outputs.instance_id }}
+        INSTANCE_IP: ${{ needs.deploy.outputs.instance_ip }}
+        ADMIN_URL: ${{ needs.deploy.outputs.admin_url }}
+      run: |
+        if [ -z "$GH_TOKEN" ]; then
+          echo "::warning::GH_PAT secret not set. Cannot update repository secrets automatically."
+          echo "Please manually add these deployment details as repository secrets:"
+          echo "- ADMIN_INSTANCE_ID: $INSTANCE_ID"
+          echo "- ADMIN_INSTANCE_IP: $INSTANCE_IP"
+          echo "- ADMIN_URL: $ADMIN_URL"
+          exit 0
+        fi
+
+        gh secret set ADMIN_INSTANCE_ID --body "$INSTANCE_ID"
+        gh secret set ADMIN_INSTANCE_IP --body "$INSTANCE_IP"
+        gh secret set ADMIN_URL --body "$ADMIN_URL"
+        echo "✓ Deployment info saved as repository secrets"
+
+    - name: Display deployment summary
+      env:
+        INSTANCE_ID: ${{ needs.deploy.outputs.instance_id }}
+        INSTANCE_IP: ${{ needs.deploy.outputs.instance_ip }}
+        ADMIN_URL: ${{ needs.deploy.outputs.admin_url }}
+        TEST_RESULTS: ${{ steps.test_app.outputs.results }}
+      run: |
+        echo "=================================================="
+        echo "AWS Axialy Admin Deployment Summary"
+        echo "=================================================="
+        echo "Instance ID: $INSTANCE_ID"
+        echo "Public IP: $INSTANCE_IP"
+        echo "Region: ${{ github.event.inputs.aws_region }}"
+        echo "Instance Type: ${{ github.event.inputs.instance_type }}"
+        echo "=================================================="
+        echo ""
+        echo "Access URLs:"
+        echo "- Admin Login: http://$INSTANCE_IP/admin_login.php"
+        echo "- Health Check: http://$INSTANCE_IP/health.php"
+        echo "- Main Dashboard: http://$INSTANCE_IP/index.php"
+        echo ""
+        echo "Test Results: $TEST_RESULTS"
+        echo ""
+        echo "Initial Setup Instructions:"
+        echo "1. Visit: http://$INSTANCE_IP/admin_login.php"
+        echo "2. If first time setup, enter 'Casellio' as admin code"
+        echo "3. Login with username: caseylide, password: Casellio"
+        echo "4. Change default password after first login"
+        echo ""
+        echo "Database Connection:"
+        echo "- Host: ${{ secrets.DB_HOST }}"
+        echo "- Databases: axialy_admin, axialy_ui"
+        echo ""
+        if echo "$TEST_RESULTS" | grep -q "fail"; then
+          echo "⚠️  Some tests failed. Check the diagnostics above."
+          echo "   You may need to SSH to the instance for manual troubleshooting:"
+          echo "   ssh -i ~/.ssh/${{ secrets.EC2_KEY_PAIR }}.pem ec2-user@$INSTANCE_IP"
+        else
+          echo "✅ All tests passed! Application should be accessible."
+        fi
+        echo "=================================================="
+
+  cleanup:
+    runs-on: ubuntu-latest
+    name: Cleanup Temporary Resources
+    needs: [deploy, test_deployment]
+    if: always()
+    
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ github.event.inputs.aws_region }}
+
+    - name: Cleanup temporary resources
+      run: |
+        echo "Performing cleanup of temporary resources..."
+        
+        # Note: In this deployment, we keep the main resources (EC2, Security Groups)
+        # but clean up any temporary files or failed deployments
+        
+        # Cleanup any failed/orphaned instances without proper tags
+        echo "Checking for orphaned resources..."
+        
+        # This is a placeholder for any cleanup logic
+        # In the database deployment, we cleaned up temporary EC2 instances
+        # For admin deployment, the EC2 instance IS the final product
+        
+        echo "✓ Cleanup completed (no temporary resources to clean)"
+
+    - name: Final status report
+      run: |
+        if [ "${{ needs.deploy.result }}" == "success" ] && [ "${{ needs.test_deployment.result }}" == "success" ]; then
+          echo "🎉 Axialy Admin deployment completed successfully!"
+          echo "Admin interface '${{ env.INSTANCE_IDENTIFIER }}' is ready for use."
+          echo ""
+          echo "Next Steps:"
+          echo "1. Access the admin interface at the provided URL"
+          echo "2. Complete initial setup if this is the first deployment"
+          echo "3. Verify all functionality works as expected"
+          echo "4. Consider setting up DNS and SSL for production use"
+        else
+          echo "⚠️  Deployment encountered issues."
+          echo "Deploy job result: ${{ needs.deploy.result }}"
+          echo "Test job result: ${{ needs.test_deployment.result }}"
+          echo ""
+          echo "Troubleshooting steps:"
+          echo "1. Check the job logs above for specific error messages"
+          echo "2. SSH to the instance if it was created: ssh -i ~/.ssh/${{ secrets.EC2_KEY_PAIR }}.pem ec2-user@${{ needs.deploy.outputs.instance_ip }}"
+          echo "3. Run the verification script: sudo /usr/local/bin/verify-axialy-admin"
+          echo "4. Check system logs: sudo journalctl -u httpd -f"
+        fi
