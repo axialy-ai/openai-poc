@@ -1,4 +1,44 @@
-22
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+data "aws_vpc" "default" {
+  default = true
+}
+
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+}
+
+# Get the latest Amazon Linux 2023 AMI
+data "aws_ami" "amazon_linux" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-*-x86_64"]
+  }
+
+  filter {
+    name   = "state"
+    values = ["available"]
+  }
+}
+
+# Create security group for Axialy Admin
+resource "aws_security_group" "axialy_admin" {
+  name        = "${var.instance_identifier}-sg"
+  description = "Security group for Axialy Admin application"
+  vpc_id      = data.aws_vpc.default.id
+
+  # SSH access
+  ingress {
+    from_port   = 22
+    to_port     = 22
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
     description = "SSH access"
@@ -30,18 +70,26 @@
   }
 
   tags = {
-    Name = "${var.instance_name} Security Group"
+    Name = "Axialy Admin Security Group"
   }
 }
 
 # User data script for server setup
 locals {
   user_data = base64encode(templatefile("${path.module}/user-data.sh", {
-    db_host     = var.db_host
-    db_port     = var.db_port
-    db_user     = var.db_user
-    db_password = var.db_password
-    domain_name = var.domain_name
+    db_host                = var.db_host
+    db_port                = var.db_port
+    db_user                = var.db_user
+    db_password            = var.db_password
+    domain_name            = var.domain_name
+    admin_default_user     = var.admin_default_user
+    admin_default_email    = var.admin_default_email
+    admin_default_password = var.admin_default_password
+    smtp_host              = var.smtp_host
+    smtp_port              = var.smtp_port
+    smtp_user              = var.smtp_user
+    smtp_password          = var.smtp_password
+    smtp_secure            = var.smtp_secure
   }))
 }
 
@@ -65,7 +113,7 @@ resource "aws_instance" "axialy_admin" {
   }
 
   tags = {
-    Name        = var.instance_name
+    Name        = var.instance_identifier
     Project     = "axialy-ai"
     Environment = "production"
     Component   = "admin"
@@ -76,21 +124,21 @@ resource "aws_instance" "axialy_admin" {
   }
 }
 
-# Elastic IP for static IP address
-resource "aws_eip" "axialy_admin" {
-  instance = aws_instance.axialy_admin.id
-  domain   = "vpc"
+# Associate existing Elastic IP
+data "aws_eip" "axialy_admin" {
+  id = var.elastic_ip_allocation_id
+}
 
-  tags = {
-    Name = "${var.instance_name} EIP"
-  }
+resource "aws_eip_association" "axialy_admin" {
+  instance_id   = aws_instance.axialy_admin.id
+  allocation_id = data.aws_eip.axialy_admin.id
 
   depends_on = [aws_instance.axialy_admin]
 }
 
 # CloudWatch Log Group for application logs
-resource "aws_cloudwatch_log_group" "axialy_admin_logs" {
-  name              = "/aws/ec2/${var.instance_name}"
+resource "aws_cloudwatch_log_group" "axialy_admin" {
+  name              = "/aws/ec2/${var.instance_identifier}"
   retention_in_days = 14
 
   tags = {
