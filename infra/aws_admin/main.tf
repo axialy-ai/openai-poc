@@ -1,232 +1,145 @@
-name: AWS Axialy Admin Deployment (Fixed)
+data "aws_availability_zones" "available" {
+  state = "available"
+}
 
-on:
-  workflow_dispatch:
-    inputs:
-      instance_identifier:
-        description: "EC2 instance identifier"
-        required: true
-        default: "axialy-admin"
-      aws_region:
-        description: "AWS region (e.g. us-west-2, us-east-1)"
-        default: "us-west-2"
-        required: true
-      instance_type:
-        description: "EC2 instance type"
-        default: "t3.micro"
-        required: true
-      domain_name:
-        description: "Optional domain name for admin interface"
-        required: false
-        default: ""
+data "aws_vpc" "default" {
+  default = true
+}
 
-env:
-  AWS_DEFAULT_REGION: ${{ github.event.inputs.aws_region }}
-  INSTANCE_IDENTIFIER: ${{ github.event.inputs.instance_identifier }}
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+}
 
-jobs:
-  prepare:
-    runs-on: ubuntu-latest
-    name: Prepare AWS Environment
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+# Get the latest Amazon Linux 2023 AMI
+data "aws_ami" "amazon_linux" {
+  most_recent = true
+  owners      = ["amazon"]
 
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ github.event.inputs.aws_region }}
+  filter {
+    name   = "name"
+    values = ["al2023-ami-*-x86_64"]
+  }
 
-    - name: Cleanup existing resources
-      run: |
-        echo "Cleaning up existing EC2 instances..."
-        EXISTING_INSTANCES=$(aws ec2 describe-instances \
-          --filters "Name=tag:Name,Values=${{ env.INSTANCE_IDENTIFIER }}" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
-          --query 'Reservations[].Instances[].InstanceId' --output text || echo "")
-        
-        if [ -n "$EXISTING_INSTANCES" ]; then
-          echo "Terminating instances: $EXISTING_INSTANCES"
-          aws ec2 terminate-instances --instance-ids $EXISTING_INSTANCES || true
-          aws ec2 wait instance-terminated --instance-ids $EXISTING_INSTANCES || true
-        fi
-        
-        # Cleanup security groups
-        SG_NAME="${{ env.INSTANCE_IDENTIFIER }}-sg"
-        SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$SG_NAME" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo "None")
-        if [ "$SG_ID" != "None" ] && [ "$SG_ID" != "" ]; then
-          echo "Deleting security group $SG_ID..."
-          aws ec2 delete-security-group --group-id "$SG_ID" || true
-        fi
+  filter {
+    name   = "state"
+    values = ["available"]
+  }
+}
 
-  validate_database:
-    runs-on: ubuntu-latest
-    name: Validate Database Connection
-    needs: prepare
-    
-    steps:
-    - name: Install MySQL Client
-      run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y mysql-client-8.0
+# Create security group for Axialy Admin
+resource "aws_security_group" "axialy_admin" {
+  name        = "${var.instance_identifier}-sg"
+  description = "Security group for Axialy Admin application"
+  vpc_id      = data.aws_vpc.default.id
 
-    - name: Test database connectivity
-      env:
-        DB_HOST: ${{ secrets.DB_HOST }}
-        DB_PORT: ${{ secrets.DB_PORT }}
-        DB_USER: ${{ secrets.DB_USER }}
-        DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-      run: |
-        echo "Testing database connection..."
-        
-        if [ -z "$DB_HOST" ] || [ -z "$DB_USER" ] || [ -z "$DB_PASSWORD" ]; then
-          echo "ERROR: Missing database credentials in GitHub secrets"
-          exit 1
-        fi
-        
-        # Test connection to both databases
-        for db in axialy_admin axialy_ui; do
-          echo "Testing connection to $db database..."
-          if mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" \
-              --ssl-mode=REQUIRED \
-              --connect-timeout=10 \
-              -e "USE $db; SELECT 1;" 2>/dev/null; then
-            echo "✓ Connection to $db successful"
-          else
-            echo "ERROR: Cannot connect to $db database"
-            exit 1
-          fi
-        done
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "SSH access"
+  }
 
-  deploy:
-    runs-on: ubuntu-latest
-    name: Deploy EC2 and Configure Admin Application
-    needs: [prepare, validate_database]
-    outputs:
-      instance_id: ${{ steps.deploy_ec2.outputs.instance_id }}
-      instance_ip: ${{ steps.deploy_ec2.outputs.instance_ip }}
-      admin_url: ${{ steps.deploy_ec2.outputs.admin_url }}
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTP access"
+  }
 
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTPS access"
+  }
 
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ github.event.inputs.aws_region }}
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v3
-      with:
-        terraform_version: 1.6.6
-        terraform_wrapper: false
+  tags = {
+    Name = "Axialy Admin Security Group"
+  }
+}
 
-    - name: Terraform Init
-      working-directory: infra/aws_admin
-      run: terraform init
+# Use template_file data source to avoid heredoc issues
+data "template_file" "user_data" {
+  template = file("${path.module}/user_data_template.sh")
+  
+  vars = {
+    db_host              = var.db_host
+    db_port              = var.db_port
+    db_user              = var.db_user
+    db_password          = var.db_password
+    admin_default_user   = var.admin_default_user
+    admin_default_email  = var.admin_default_email
+    admin_default_password = var.admin_default_password
+    smtp_host            = var.smtp_host
+    smtp_port            = var.smtp_port
+    smtp_user            = var.smtp_user
+    smtp_password        = var.smtp_password
+    smtp_secure          = var.smtp_secure
+  }
+}
 
-    - name: Terraform Apply
-      id: deploy_ec2
-      working-directory: infra/aws_admin
-      run: |
-        terraform apply -auto-approve \
-          -var="instance_identifier=${{ env.INSTANCE_IDENTIFIER }}" \
-          -var="aws_region=${{ github.event.inputs.aws_region }}" \
-          -var="instance_type=${{ github.event.inputs.instance_type }}" \
-          -var="domain_name=${{ github.event.inputs.domain_name }}" \
-          -var="key_pair_name=${{ secrets.EC2_KEY_PAIR }}" \
-          -var="elastic_ip_allocation_id=${{ secrets.EC2_ELASTIC_IP_ALLOCATION_ID }}" \
-          -var="db_host=${{ secrets.DB_HOST }}" \
-          -var="db_port=${{ secrets.DB_PORT }}" \
-          -var="db_user=${{ secrets.DB_USER }}" \
-          -var="db_password=${{ secrets.DB_PASSWORD }}" \
-          -var="admin_default_user=${{ secrets.ADMIN_DEFAULT_USER }}" \
-          -var="admin_default_email=${{ secrets.ADMIN_DEFAULT_EMAIL }}" \
-          -var="admin_default_password=${{ secrets.ADMIN_DEFAULT_PASSWORD }}" \
-          -var="smtp_host=${{ secrets.SMTP_HOST }}" \
-          -var="smtp_port=${{ secrets.SMTP_PORT }}" \
-          -var="smtp_user=${{ secrets.SMTP_USER }}" \
-          -var="smtp_password=${{ secrets.SMTP_PASSWORD }}" \
-          -var="smtp_secure=${{ secrets.SMTP_SECURE }}"
+# EC2 instance for Axialy Admin
+resource "aws_instance" "axialy_admin" {
+  ami           = data.aws_ami.amazon_linux.id
+  instance_type = var.instance_type
+  key_name      = var.key_pair_name
 
-        echo "instance_id=$(terraform output -raw instance_id)" >> $GITHUB_OUTPUT
-        echo "instance_ip=$(terraform output -raw instance_ip)" >> $GITHUB_OUTPUT
-        echo "admin_url=$(terraform output -raw admin_url)" >> $GITHUB_OUTPUT
+  vpc_security_group_ids = [aws_security_group.axialy_admin.id]
+  subnet_id              = data.aws_subnets.default.ids[0]
 
-    - name: Wait for deployment completion
-      run: |
-        echo "Waiting for EC2 instance to be running..."
-        aws ec2 wait instance-running --instance-ids ${{ steps.deploy_ec2.outputs.instance_id }}
-        echo "Waiting additional time for user data script to complete..."
-        sleep 300
+  associate_public_ip_address = true
 
-  test_deployment:
-    runs-on: ubuntu-latest
-    name: Test Application Deployment
-    needs: deploy
+  user_data = base64encode(data.template_file.user_data.rendered)
 
-    steps:
-    - name: Test application endpoints
-      env:
-        INSTANCE_IP: ${{ needs.deploy.outputs.instance_ip }}
-      run: |
-        echo "Testing application deployment..."
-        
-        # Wait for services to be ready
-        sleep 60
-        
-        # Test health endpoint
-        echo "Testing health endpoint..."
-        HEALTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 10 --max-time 30 "http://$INSTANCE_IP/health.php" || echo "000")
-        echo "Health endpoint: HTTP $HEALTH_STATUS"
-        
-        # Test login page
-        echo "Testing admin login page..."
-        LOGIN_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 10 --max-time 30 "http://$INSTANCE_IP/admin_login.php" || echo "000")
-        echo "Login page: HTTP $LOGIN_STATUS"
-        
-        # Test content
-        echo "Testing page content..."
-        if curl -s "http://$INSTANCE_IP/admin_login.php" | grep -q "Admin Login"; then
-          echo "✓ Login page content is loading correctly"
-        else
-          echo "⚠ Login page content issue detected"
-        fi
-        
-        # Summary
-        if [ "$LOGIN_STATUS" = "200" ] && [ "$HEALTH_STATUS" = "200" ]; then
-          echo "✅ All tests passed! Application is accessible."
-        else
-          echo "⚠️ Some tests failed. Manual verification may be needed."
-        fi
+  root_block_device {
+    volume_type = "gp3"
+    volume_size = 30
+    encrypted   = true
+  }
 
-    - name: Display deployment summary
-      env:
-        INSTANCE_ID: ${{ needs.deploy.outputs.instance_id }}
-        INSTANCE_IP: ${{ needs.deploy.outputs.instance_ip }}
-        ADMIN_URL: ${{ needs.deploy.outputs.admin_url }}
-      run: |
-        echo "=================================================="
-        echo "AWS Axialy Admin Deployment Summary"
-        echo "=================================================="
-        echo "Instance ID: $INSTANCE_ID"
-        echo "Public IP: $INSTANCE_IP"
-        echo "Region: ${{ github.event.inputs.aws_region }}"
-        echo "Instance Type: ${{ github.event.inputs.instance_type }}"
-        echo "=================================================="
-        echo ""
-        echo "Access URLs:"
-        echo "- Admin Login: http://$INSTANCE_IP/admin_login.php"
-        echo "- Health Check: http://$INSTANCE_IP/health.php"
-        echo ""
-        echo "Initial Setup Instructions:"
-        echo "1. Visit: http://$INSTANCE_IP/admin_login.php"
-        echo "2. If first time setup, enter 'Casellio' as admin code"
-        echo "3. Login with username: caseylide, password: Casellio"
-        echo "4. Change default password after first login"
-        echo "=================================================="
+  tags = {
+    Name        = var.instance_identifier
+    Project     = "axialy-ai"
+    Environment = "production"
+    Component   = "admin"
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# Associate existing Elastic IP
+data "aws_eip" "axialy_admin" {
+  id = var.elastic_ip_allocation_id
+}
+
+resource "aws_eip_association" "axialy_admin" {
+  instance_id   = aws_instance.axialy_admin.id
+  allocation_id = data.aws_eip.axialy_admin.id
+
+  depends_on = [aws_instance.axialy_admin]
+}
+
+# CloudWatch Log Group for application logs
+resource "aws_cloudwatch_log_group" "axialy_admin" {
+  name              = "/aws/ec2/${var.instance_identifier}"
+  retention_in_days = 14
+
+  tags = {
+    Name = "Axialy Admin Logs"
+  }
+}
