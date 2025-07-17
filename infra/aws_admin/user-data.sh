@@ -1,0 +1,261 @@
+#!/bin/bash
+# infra/aws_admin/user-data.sh
+# User data script for Axialy Admin EC2 instance setup
+
+set -e
+
+# Variables passed from Terraform
+DB_HOST="${db_host}"
+DB_PORT="${db_port}"
+DB_USER="${db_user}"
+DB_PASSWORD="${db_password}"
+DOMAIN_NAME="${domain_name}"
+
+# Log everything
+exec > >(tee /var/log/user-data.log) 2>&1
+
+echo "Starting Axialy Admin server setup at $(date)"
+
+# Update system
+echo "Updating system packages..."
+dnf update -y
+
+# Install required packages
+echo "Installing required packages..."
+dnf install -y \
+  httpd \
+  php \
+  php-cli \
+  php-fpm \
+  php-mysqlnd \
+  php-zip \
+  php-xml \
+  php-mbstring \
+  php-json \
+  php-curl \
+  php-gd \
+  php-opcache \
+  mysql \
+  unzip \
+  wget \
+  curl \
+  git
+
+# Configure PHP
+echo "Configuring PHP..."
+cat > /etc/php.ini << 'PHP_CONFIG'
+[PHP]
+memory_limit = 256M
+upload_max_filesize = 50M
+post_max_size = 50M
+max_execution_time = 300
+max_input_time = 300
+session.gc_maxlifetime = 14400
+session.cookie_secure = 1
+session.cookie_httponly = 1
+session.use_only_cookies = 1
+expose_php = Off
+display_errors = Off
+log_errors = On
+error_log = /var/log/php-errors.log
+date.timezone = UTC
+PHP_CONFIG
+
+# Start and enable services
+echo "Starting services..."
+systemctl start httpd
+systemctl enable httpd
+systemctl start php-fpm
+systemctl enable php-fpm
+
+# Configure Apache
+echo "Configuring Apache..."
+cat > /etc/httpd/conf.d/axialy-admin.conf << 'APACHE_CONFIG'
+<VirtualHost *:80>
+    DocumentRoot /var/www/html/axialy-admin
+    ServerName ${domain_name}
+    
+    <Directory /var/www/html/axialy-admin>
+        Options -Indexes +FollowSymLinks
+        AllowOverride All
+        Require all granted
+        
+        # Security headers
+        Header always set X-Content-Type-Options nosniff
+        Header always set X-Frame-Options DENY
+        Header always set X-XSS-Protection "1; mode=block"
+        Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    </Directory>
+    
+    # Hide sensitive files
+    <FilesMatch "\.(env|log|ini)$">
+        Require all denied
+    </FilesMatch>
+    
+    # PHP handling
+    <FilesMatch \.php$>
+        SetHandler "proxy:unix:/run/php-fpm/www.sock|fcgi://localhost"
+    </FilesMatch>
+    
+    # Logging
+    ErrorLog /var/log/httpd/axialy-admin-error.log
+    CustomLog /var/log/httpd/axialy-admin-access.log combined
+</VirtualHost>
+APACHE_CONFIG
+
+# Create application directory
+echo "Setting up application directory..."
+mkdir -p /var/www/html/axialy-admin
+
+# Clone or download application files from GitHub
+echo "Downloading application files..."
+cd /tmp
+curl -L -o axialy-admin.zip "https://github.com/axialy-ai/openai-poc/archive/main.zip"
+unzip -q axialy-admin.zip
+cp -r openai-poc-main/axialy-admin-product/* /var/www/html/axialy-admin/
+
+# Create .env file
+echo "Creating environment configuration..."
+cat > /var/www/html/axialy-admin/.env << ENV_CONFIG
+# Database Configuration (AWS RDS)
+DB_HOST=$DB_HOST
+DB_PORT=$DB_PORT
+DB_USER=$DB_USER
+DB_PASSWORD=$DB_PASSWORD
+DB_NAME=axialy_admin
+
+# UI Database Configuration  
+UI_DB_HOST=$DB_HOST
+UI_DB_PORT=$DB_PORT
+UI_DB_USER=$DB_USER
+UI_DB_PASSWORD=$DB_PASSWORD
+UI_DB_NAME=axialy_ui
+
+# Application Configuration
+APP_ENV=production
+APP_DEBUG=false
+APP_BASE_URL=http://$DOMAIN_NAME
+
+# Session Configuration
+SESSION_LIFETIME=14400
+SESSION_SECURE=false
+SESSION_HTTPONLY=true
+
+# Admin Configuration (will be set from GitHub secrets in deployment)
+ADMIN_DEFAULT_USER=caseylide
+ADMIN_DEFAULT_EMAIL=caseylide@gmail.com
+ADMIN_DEFAULT_PASSWORD=Casellio
+ENV_CONFIG
+
+# Create .htaccess for additional security
+cat > /var/www/html/axialy-admin/.htaccess << 'HTACCESS'
+# Security headers
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options nosniff
+    Header always set X-Frame-Options DENY
+    Header always set X-XSS-Protection "1; mode=block"
+</IfModule>
+
+# Prevent access to sensitive files
+<FilesMatch "\.(env|log|ini|conf)$">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+# Directory protection
+<FilesMatch "^\.">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+# PHP error handling
+php_flag display_errors Off
+php_flag log_errors On
+php_value error_log /var/log/httpd/php-errors.log
+HTACCESS
+
+# Set permissions
+echo "Setting file permissions..."
+chown -R apache:apache /var/www/html/axialy-admin
+chmod -R 755 /var/www/html/axialy-admin
+chmod 600 /var/www/html/axialy-admin/.env
+
+# Create log directories
+mkdir -p /var/log/axialy-admin
+chown apache:apache /var/log/axialy-admin
+
+# Test database connection
+echo "Testing database connection..."
+php -r "
+\$host = '$DB_HOST';
+\$port = '$DB_PORT';
+\$user = '$DB_USER';
+\$pass = '$DB_PASSWORD';
+\$dsn = \"mysql:host=\$host;port=\$port;dbname=axialy_admin;charset=utf8mb4\";
+try {
+    \$pdo = new PDO(\$dsn, \$user, \$pass, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+    ]);
+    echo 'Database connection successful!' . PHP_EOL;
+} catch (Exception \$e) {
+    echo 'Database connection failed: ' . \$e->getMessage() . PHP_EOL;
+    exit(1);
+}
+"
+
+# Restart services
+echo "Restarting services..."
+systemctl restart httpd
+systemctl restart php-fpm
+
+# Verify services are running
+systemctl is-active httpd || (echo "Apache failed to start" && exit 1)
+systemctl is-active php-fpm || (echo "PHP-FPM failed to start" && exit 1)
+
+# Test HTTP response
+echo "Testing HTTP response..."
+sleep 5
+HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/admin_login.php || echo "000")
+if [ "$HTTP_STATUS" = "200" ]; then
+    echo "✓ Application is responding correctly (HTTP $HTTP_STATUS)"
+else
+    echo "⚠ Application response status: HTTP $HTTP_STATUS"
+fi
+
+# Create a simple health check endpoint
+cat > /var/www/html/axialy-admin/health.php << 'HEALTH_PHP'
+<?php
+header('Content-Type: application/json');
+
+$health = [
+    'status' => 'ok',
+    'timestamp' => date('c'),
+    'services' => []
+];
+
+// Check database connection
+try {
+    require_once __DIR__ . '/includes/AdminDBConfig.php';
+    use Axialy\AdminConfig\AdminDBConfig;
+    AdminDBConfig::getInstance()->getPdo();
+    $health['services']['database'] = 'ok';
+} catch (Exception $e) {
+    $health['services']['database'] = 'error';
+    $health['status'] = 'error';
+}
+
+// Check PHP
+$health['services']['php'] = 'ok';
+$health['php_version'] = PHP_VERSION;
+
+echo json_encode($health, JSON_PRETTY_PRINT);
+HEALTH_PHP
+
+# Set permissions for health check
+chown apache:apache /var/www/html/axialy-admin/health.php
+chmod 644 /var/www/html/axialy-admin/health.php
+
+echo "✓ Axialy Admin server setup completed successfully at $(date)"
+echo "✓ Application should be accessible at http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)/admin_login.php"
