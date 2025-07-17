@@ -73,7 +73,7 @@ resource "aws_security_group" "axialy_admin" {
 
 # Use template_file data source to avoid heredoc issues
 data "template_file" "user_data" {
-  template = file("${path.module}/user_data_template.sh")
+  template = file("${path.module}/scripts/user_data_template.sh")
   
   vars = {
     db_host              = var.db_host
