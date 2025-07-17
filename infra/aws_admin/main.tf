@@ -270,7 +270,7 @@ APACHE_EOF
 #!/bin/bash
 echo "Apache: $(systemctl is-active httpd)"
 echo "PHP-FPM: $(systemctl is-active php-fpm)"
-echo "Login test: $(curl -s -o /dev/null -w '%{http_code}' http://localhost/admin_login.php)"
+echo "Login test: $(curl -s -o /dev/null -w '%%{http_code}' http://localhost/admin_login.php)"
 VERIFY_EOF
     chmod +x /usr/local/bin/verify-axialy-admin
     
