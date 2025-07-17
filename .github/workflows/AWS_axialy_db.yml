@@ -1,4 +1,4 @@
-name: AWS Axialy Database Deployment
+name: Step 1. AWS Axialy Database Deployment
 
 on:
   workflow_dispatch:
