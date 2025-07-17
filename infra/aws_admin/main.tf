@@ -33,10 +33,10 @@ data "aws_ami" "amazon_linux" {
     values = ["hvm"]
   }
 
-  # CRITICAL: Exclude ECS Optimized AMIs by excluding descriptions containing "ECS"
+  # CRITICAL: Exclude ECS Optimized by filtering the description
   filter {
     name   = "description"
-    values = ["Amazon Linux 2023 AMI 2023*"]
+    values = ["Amazon Linux 2023 AMI 2023* x86_64 HVM kernel*"]
   }
 }
 
