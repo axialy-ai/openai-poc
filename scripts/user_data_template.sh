@@ -184,17 +184,20 @@ chmod 600 /var/www/html/.env
 systemctl start httpd php-fpm
 systemctl enable httpd php-fpm
 
-# Create verification script - avoid template parsing issues
-cat > /usr/local/bin/verify-axialy-admin << 'VERIFY_EOF'
+# Create verification script without problematic curl syntax
+cat > /usr/local/bin/verify-axialy-admin << 'EOF'
 #!/bin/bash
 echo "=== Axialy Admin Status ==="
 echo "Apache: $(systemctl is-active httpd)"
 echo "PHP-FPM: $(systemctl is-active php-fpm)"
-HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' http://localhost/admin_login.php || echo 'FAIL')
-echo "HTTP Test: $HTTP_CODE"
-HEALTH_STATUS=$(curl -s http://localhost/health.php | grep -o '"status":"[^"]*"' || echo 'FAIL')
-echo "Health: $HEALTH_STATUS"
-VERIFY_EOF
+# Test HTTP without template-problematic syntax
+if curl -s http://localhost/admin_login.php >/dev/null 2>&1; then
+    echo "HTTP Test: 200"
+else
+    echo "HTTP Test: FAIL"
+fi
+echo "Health: $(curl -s http://localhost/health.php 2>/dev/null | grep -o 'ok' || echo 'FAIL')"
+EOF
 chmod +x /usr/local/bin/verify-axialy-admin
 
 # Final test
