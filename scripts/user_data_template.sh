@@ -184,11 +184,11 @@ chmod 600 /var/www/html/.env
 systemctl start httpd php-fpm
 systemctl enable httpd php-fpm
 
-# Create verification script (avoiding template issues)
+# Create verification script - ESCAPED the %{http_code} properly
 echo '#!/bin/bash' > /usr/local/bin/verify-axialy-admin
 echo 'echo "Apache: $(systemctl is-active httpd)"' >> /usr/local/bin/verify-axialy-admin
 echo 'echo "PHP-FPM: $(systemctl is-active php-fpm)"' >> /usr/local/bin/verify-axialy-admin
-echo 'echo "Login test: $(curl -s -o /dev/null -w '"'"'%{http_code}'"'"' http://localhost/admin_login.php)"' >> /usr/local/bin/verify-axialy-admin
+echo 'echo "Login test: $(curl -s -o /dev/null -w '"'"'%%{http_code}'"'"' http://localhost/admin_login.php)"' >> /usr/local/bin/verify-axialy-admin
 chmod +x /usr/local/bin/verify-axialy-admin
 
 # Final test
