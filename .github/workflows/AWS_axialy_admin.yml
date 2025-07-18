@@ -597,26 +597,26 @@ jobs:
         echo "✓ Web server configured"
 
     - name: Deploy application files on EC2
-      env:
-        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
-        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
-      run: |
-        echo "Deploying application files..."
-        
-        # Create web directory and deploy files
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo mkdir -p /var/www/html/axialy-admin"
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo cp -r ~/axialy-admin-product/* /var/www/html/axialy-admin/"
-        
-        # Set permissions
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chown -R apache:apache /var/www/html/axialy-admin"
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chmod -R 755 /var/www/html/axialy-admin"
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chmod 600 /var/www/html/axialy-admin/.env"
-        
-        # Create log directories
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo mkdir -p /var/log/axialy-admin"
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chown apache:apache /var/log/axialy-admin"
-        
-        echo "✓ Application files deployed"
+          env:
+            INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+            EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+          run: |
+            echo "Deploying application files..."
+            
+            # Create web directory and deploy files (including hidden files)
+            ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo mkdir -p /var/www/html/axialy-admin"
+            ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo cp -r ~/axialy-admin-product/. /var/www/html/axialy-admin/"
+            
+            # Set permissions
+            ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chown -R apache:apache /var/www/html/axialy-admin"
+            ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chmod -R 755 /var/www/html/axialy-admin"
+            ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chmod 600 /var/www/html/axialy-admin/.env"
+            
+            # Create log directories
+            ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo mkdir -p /var/log/axialy-admin"
+            ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chown apache:apache /var/log/axialy-admin"
+            
+            echo "✓ Application files deployed"
 
     - name: Start services and test on EC2
       env:
