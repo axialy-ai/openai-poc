@@ -1,4 +1,4 @@
-name: Pillar 1. AWS Axialy Database Deployment
+name: Install 1. AWS Axialy Database Deployment
 
 on:
   workflow_dispatch:
