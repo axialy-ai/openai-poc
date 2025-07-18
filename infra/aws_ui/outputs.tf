@@ -48,5 +48,6 @@ output "estimated_monthly_cost" {
     storage_40gb = "~$4-5 USD (40GB gp3)"
     data_transfer = "~$2-5 USD"
     total_estimate = var.instance_type == "t3.small" ? "~$21-30 USD per month" : "~$31-50 USD per month"
+    note = "No Elastic IP costs since using dynamic public IP"
   }
 }
