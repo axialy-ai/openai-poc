@@ -441,9 +441,9 @@ jobs:
         elif [ -d "axialy-ui" ]; then
           echo "Found UI source in 'axialy-ui/' directory"
           cp -r axialy-ui/* axialy-ui-product/
-        elif [ -d "axialy-ui-product" ]; then
-          echo "Found UI source in 'axialy-ui-product/' directory"
-          cp -r axialy-ui-product/* axialy-ui-product/
+        elif [ -d "src/axialy-ui-product" ]; then
+          echo "Found UI source in 'src/axialy-ui-product/' directory"
+          cp -r src/axialy-ui-product/* axialy-ui-product/
         elif [ -d "src/ui" ]; then
           echo "Found UI source in 'src/ui/' directory"
           cp -r src/ui/* axialy-ui-product/
