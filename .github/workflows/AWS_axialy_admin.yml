@@ -35,6 +35,45 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    - name: Validate required secrets
+      run: |
+        echo "Validating required GitHub secrets..."
+        
+        MISSING_SECRETS=()
+        
+        # AWS credentials
+        [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] && MISSING_SECRETS+=("AWS_ACCESS_KEY_ID")
+        [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ] && MISSING_SECRETS+=("AWS_SECRET_ACCESS_KEY")
+        
+        # EC2/SSH credentials
+        [ -z "${{ secrets.EC2_KEY_PAIR }}" ] && MISSING_SECRETS+=("EC2_KEY_PAIR")
+        [ -z "${{ secrets.EC2_SSH_PRIVATE_KEY }}" ] && MISSING_SECRETS+=("EC2_SSH_PRIVATE_KEY")
+        [ -z "${{ secrets.EC2_SSH_PASSPHRASE }}" ] && MISSING_SECRETS+=("EC2_SSH_PASSPHRASE")
+        [ -z "${{ secrets.EC2_ELASTIC_IP_ALLOCATION_ID }}" ] && MISSING_SECRETS+=("EC2_ELASTIC_IP_ALLOCATION_ID")
+        
+        # Database credentials
+        [ -z "${{ secrets.DB_HOST }}" ] && MISSING_SECRETS+=("DB_HOST")
+        [ -z "${{ secrets.DB_USER }}" ] && MISSING_SECRETS+=("DB_USER")
+        [ -z "${{ secrets.DB_PASSWORD }}" ] && MISSING_SECRETS+=("DB_PASSWORD")
+        
+        # Admin credentials
+        [ -z "${{ secrets.ADMIN_DEFAULT_USER }}" ] && MISSING_SECRETS+=("ADMIN_DEFAULT_USER")
+        [ -z "${{ secrets.ADMIN_DEFAULT_EMAIL }}" ] && MISSING_SECRETS+=("ADMIN_DEFAULT_EMAIL")
+        [ -z "${{ secrets.ADMIN_DEFAULT_PASSWORD }}" ] && MISSING_SECRETS+=("ADMIN_DEFAULT_PASSWORD")
+        
+        # SMTP credentials
+        [ -z "${{ secrets.SMTP_HOST }}" ] && MISSING_SECRETS+=("SMTP_HOST")
+        [ -z "${{ secrets.SMTP_USER }}" ] && MISSING_SECRETS+=("SMTP_USER")
+        [ -z "${{ secrets.SMTP_PASSWORD }}" ] && MISSING_SECRETS+=("SMTP_PASSWORD")
+        
+        if [ ${#MISSING_SECRETS[@]} -gt 0 ]; then
+          echo "❌ Missing required secrets:"
+          printf '%s\n' "${MISSING_SECRETS[@]}"
+          exit 1
+        fi
+        
+        echo "✅ All required secrets are present"
+
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
@@ -115,6 +154,37 @@ jobs:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ${{ github.event.inputs.aws_region }}
+
+    - name: Validate SSH credentials
+      run: |
+        echo "Validating SSH key and passphrase..."
+        
+        # Write key to temporary file
+        echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > /tmp/test_key.pem
+        chmod 600 /tmp/test_key.pem
+        
+        # Test key format
+        if ! ssh-keygen -l -f /tmp/test_key.pem >/dev/null 2>&1; then
+          echo "❌ Invalid SSH private key format"
+          rm -f /tmp/test_key.pem
+          exit 1
+        fi
+        
+        # Test passphrase by attempting to load key
+        eval $(ssh-agent -s)
+        export DISPLAY=:0.0
+        if echo "${{ secrets.EC2_SSH_PASSPHRASE }}" | SSH_ASKPASS=/bin/echo setsid ssh-add /tmp/test_key.pem >/dev/null 2>&1; then
+          echo "✅ SSH key and passphrase validation successful"
+          ssh-agent -k
+        else
+          echo "❌ SSH passphrase validation failed"
+          ssh-agent -k
+          rm -f /tmp/test_key.pem
+          exit 1
+        fi
+        
+        rm -f /tmp/test_key.pem
+        echo "SSH credentials validated successfully"
 
     - name: Wait for cleanup completion
       run: |
@@ -285,243 +355,95 @@ jobs:
         aws ec2 wait instance-running --instance-ids ${{ steps.deploy_ec2.outputs.instance_id }}
         echo "EC2 instance is running"
 
-    - name: Setup SSH with passphrase-protected key
-      env:
-        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
-      run: |
-        echo "Setting up SSH with passphrase-protected key..."
-        
-        # Create SSH directory
-        mkdir -p ~/.ssh
-        chmod 700 ~/.ssh
-        
-        # Write the private key to file
-        echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/ec2_key.pem
-        chmod 600 ~/.ssh/ec2_key.pem
-        
-        # Create SSH config to handle the passphrase-protected key
-        cat > ~/.ssh/config << EOF
-        Host ec2-axialy-admin
-            HostName $INSTANCE_IP
-            User ec2-user
-            IdentityFile ~/.ssh/ec2_key.pem
-            StrictHostKeyChecking no
-            UserKnownHostsFile /dev/null
-            ConnectTimeout 30
-            ServerAliveInterval 60
-            ServerAliveCountMax 3
-        EOF
-        chmod 600 ~/.ssh/config
-        
-        # Install and configure sshpass for passphrase handling
-        sudo apt-get update
-        sudo apt-get install -y sshpass expect
-        
-        # Create expect script for SSH commands with passphrase
-        cat > ~/.ssh/ssh_with_passphrase.exp << 'EOF'
-        #!/usr/bin/expect -f
-        set timeout 30
-        set host [lindex $argv 0]
-        set command [lindex $argv 1]
-        set passphrase "$env(EC2_SSH_PASSPHRASE)"
-        
-        spawn ssh $host $command
-        expect {
-            "Enter passphrase for key" {
-                send "$passphrase\r"
-                exp_continue
-            }
-            "$ " {
-                # Already logged in, command completed
-            }
-            timeout {
-                puts "SSH connection timeout"
-                exit 1
-            }
-            eof
-        }
-        wait
-        EOF
-        chmod +x ~/.ssh/ssh_with_passphrase.exp
-        
-        # Create expect script for SCP with passphrase
-        cat > ~/.ssh/scp_with_passphrase.exp << 'EOF'
-        #!/usr/bin/expect -f
-        set timeout 30
-        set source [lindex $argv 0]
-        set dest [lindex $argv 1]
-        set passphrase "$env(EC2_SSH_PASSPHRASE)"
-        
-        spawn scp -r $source $dest
-        expect {
-            "Enter passphrase for key" {
-                send "$passphrase\r"
-                exp_continue
-            }
-            "100%" {
-                # File transfer progress
-                exp_continue
-            }
-            eof
-        }
-        wait
-        EOF
-        chmod +x ~/.ssh/scp_with_passphrase.exp
-        
-        echo "SSH setup completed"
-
-    - name: Wait for SSH to be available
-      env:
-        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
-        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
-      run: |
-        echo "Waiting for SSH to be available..."
-        
-        for i in {1..20}; do
-          echo "Testing SSH connection (attempt $i/20)..."
-          
-          if expect ~/.ssh/ssh_with_passphrase.exp ec2-axialy-admin "echo 'SSH ready'" 2>/dev/null | grep -q "SSH ready"; then
-            echo "✓ SSH is ready and responding"
-            break
-          fi
-          
-          if [ $i -eq 20 ]; then
-            echo "❌ SSH failed to become available after 20 attempts"
-            exit 1
-          fi
-          
-          echo "SSH not ready, waiting 30 seconds..."
-          sleep 30
-        done
-
     - name: Deploy application to EC2
       env:
         INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
-        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
       run: |
         echo "Deploying Axialy Admin application to EC2 instance..."
         
-        # Prepare application files for deployment
-        if [ ! -d "axialy-admin-product" ]; then
-          echo "Creating application directory structure..."
-          mkdir -p axialy-admin-product/includes
-          
-          # Copy PHP application files (create them from the user_data_template.sh)
-          # Extract the PHP files from the user data template
-          echo "Creating application files..."
-          
-          # Create the .env file
-          cat > axialy-admin-product/.env << EOF
-        DB_HOST=${{ secrets.DB_HOST }}
-        DB_PORT=${{ secrets.DB_PORT }}
-        DB_USER=${{ secrets.DB_USER }}
-        DB_PASSWORD=${{ secrets.DB_PASSWORD }}
-        DB_NAME=axialy_admin
-        UI_DB_HOST=${{ secrets.DB_HOST }}
-        UI_DB_PORT=${{ secrets.DB_PORT }}
-        UI_DB_USER=${{ secrets.DB_USER }}
-        UI_DB_PASSWORD=${{ secrets.DB_PASSWORD }}
-        UI_DB_NAME=axialy_ui
-        ADMIN_DEFAULT_USER=${{ secrets.ADMIN_DEFAULT_USER }}
-        ADMIN_DEFAULT_EMAIL=${{ secrets.ADMIN_DEFAULT_EMAIL }}
-        ADMIN_DEFAULT_PASSWORD=${{ secrets.ADMIN_DEFAULT_PASSWORD }}
-        SMTP_HOST=${{ secrets.SMTP_HOST }}
-        SMTP_PORT=${{ secrets.SMTP_PORT }}
-        SMTP_USER=${{ secrets.SMTP_USER }}
-        SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}
-        SMTP_SECURE=${{ secrets.SMTP_SECURE }}
-        EOF
-          
-          # Create AdminDBConfig.php (extract from user_data_template.sh)
-          cat > axialy-admin-product/includes/AdminDBConfig.php << 'PHP_EOF'
-        <?php
-        namespace Axialy\AdminConfig;
-        use PDO, RuntimeException;
-        final class AdminDBConfig {
-            private static ?self $instance = null;
-            private string $host, $user, $password, $port;
-            private array $pdoPool = [];
-            public static function getInstance(): self { return self::$instance ??= new self(); }
-            private function __construct() {
-                $this->loadEnv();
-                $this->host = getenv('DB_HOST') ?: 'localhost';
-                $this->user = getenv('DB_USER') ?: 'root';
-                $this->password = getenv('DB_PASSWORD') ?: '';
-                $this->port = getenv('DB_PORT') ?: '3306';
-            }
-            public function getPdo(): PDO { return $this->getPdoFor('axialy_admin'); }
-            public function getPdoFor(string $dbName): PDO {
-                if (!isset($this->pdoPool[$dbName])) {
-                    $dsn = "mysql:host={$this->host};port={$this->port};dbname=$dbName;charset=utf8mb4";
-                    $pdo = new PDO($dsn, $this->user, $this->password, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-                    if ($dbName === 'axialy_admin') $this->ensureSchema($pdo);
-                    $this->pdoPool[$dbName] = $pdo;
-                }
-                return $this->pdoPool[$dbName];
-            }
-            private function ensureSchema(PDO $pdo): void {
-                $pdo->exec("CREATE TABLE IF NOT EXISTS admin_users (id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, username VARCHAR(50) NOT NULL UNIQUE, password VARCHAR(255) NOT NULL, email VARCHAR(255) NOT NULL, is_active TINYINT(1) DEFAULT 1, created_at DATETIME DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB");
-                $pdo->exec("CREATE TABLE IF NOT EXISTS admin_user_sessions (id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, admin_user_id INT UNSIGNED NOT NULL, session_token CHAR(64) NOT NULL UNIQUE, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, expires_at DATETIME NOT NULL, FOREIGN KEY (admin_user_id) REFERENCES admin_users(id) ON DELETE CASCADE) ENGINE=InnoDB");
-            }
-            private function loadEnv(): void {
-                $env = __DIR__ . '/../.env';
-                if (file_exists($env)) {
-                    foreach (file($env, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
-                        if ($line[0] !== '#' && strpos($line, '=') !== false) {
-                            [$key, $value] = explode('=', $line, 2);
-                            putenv(trim($key) . '=' . trim($value));
-                        }
-                    }
-                }
-            }
-        }
-        PHP_EOF
-          
-          # Create the remaining PHP files (admin_login.php, index.php, health.php)
-          # These would be extracted from the user_data_template.sh file sections
-          # For brevity, I'll create simplified versions here
-          
-          cat > axialy-admin-product/admin_login.php << 'LOGIN_EOF'
-        <?php
-        session_start();
-        require_once __DIR__ . '/includes/AdminDBConfig.php';
-        use Axialy\AdminConfig\AdminDBConfig;
-        $error = '';
-        if ($_POST) {
-            $username = trim($_POST['username'] ?? '');
-            $password = trim($_POST['password'] ?? '');
-            if ($username && $password) {
-                try {
-                    $db = AdminDBConfig::getInstance()->getPdo();
-                    $stmt = $db->prepare("SELECT * FROM admin_users WHERE username = ? AND is_active = 1");
-                    $stmt->execute([$username]);
-                    $user = $stmt->fetch();
-                    if ($user && password_verify($password, $user['password'])) {
-                        $token = bin2hex(random_bytes(32));
-                        $db->prepare("INSERT INTO admin_user_sessions (admin_user_id, session_token, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 4 HOUR))")->execute([$user['id'], $token]);
-                        $_SESSION['admin_user_id'] = $user['id'];
-                        $_SESSION['admin_session_token'] = $token;
-                        header('Location: index.php');
-                        exit;
-                    }
-                } catch (Exception $e) { error_log($e->getMessage()); }
-                $error = 'Invalid credentials';
-            } else $error = 'Please enter username and password';
-        }
-        ?><!DOCTYPE html><html><head><title>Axialy Admin Login</title><style>body{font-family:sans-serif;max-width:400px;margin:50px auto;padding:20px}.error{color:red;margin-bottom:1em}input{width:100%;padding:8px;margin:5px 0;box-sizing:border-box}button{width:100%;padding:10px;background:#007BFF;color:white;border:none;cursor:pointer}</style></head><body><h2>Axialy Admin Login</h2><?php if($error): ?><div class="error"><?= htmlspecialchars($error) ?></div><?php endif; ?><form method="post"><input type="text" name="username" placeholder="Username" required autofocus><input type="password" name="password" placeholder="Password" required><button type="submit">Login</button></form></body></html>
-        LOGIN_EOF
-          
-          # Add other PHP files similarly...
-          echo "Application files created successfully"
+        # Setup SSH agent and add passphrase-protected key with error handling
+        eval $(ssh-agent -s)
+        if [ $? -ne 0 ]; then
+          echo "Failed to start ssh-agent"
+          exit 1
         fi
         
-        # Copy application files to EC2 using expect script
-        echo "Copying application files to EC2..."
-        expect ~/.ssh/scp_with_passphrase.exp axialy-admin-product/ ec2-axialy-admin:~/
+        echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > /tmp/ec2_key.pem
+        chmod 600 /tmp/ec2_key.pem
         
-        # Execute deployment commands on EC2
-        echo "Executing deployment on EC2..."
-        expect ~/.ssh/ssh_with_passphrase.exp ec2-axialy-admin 'bash -s' << 'REMOTE_COMMANDS'
+        # Validate the private key format
+        if ! ssh-keygen -l -f /tmp/ec2_key.pem >/dev/null 2>&1; then
+          echo "Invalid SSH private key format"
+          rm -f /tmp/ec2_key.pem
+          exit 1
+        fi
+        
+        # Add key to ssh-agent with passphrase and better error handling
+        export DISPLAY=:0.0
+        if ! echo "${{ secrets.EC2_SSH_PASSPHRASE }}" | SSH_ASKPASS=/bin/echo setsid ssh-add /tmp/ec2_key.pem; then
+          echo "Failed to add SSH key to agent (check passphrase)"
+          ssh-agent -k
+          rm -f /tmp/ec2_key.pem
+          exit 1
+        fi
+        
+        # Verify key was added successfully
+        if ! ssh-add -l | grep -q "$(ssh-keygen -lf /tmp/ec2_key.pem | awk '{print $2}')"; then
+          echo "SSH key not properly loaded in agent"
+          ssh-agent -k
+          rm -f /tmp/ec2_key.pem
+          exit 1
+        fi
+        
+        echo "SSH key successfully loaded with passphrase"
+        
+        # Wait for SSH to be available with proper authentication
+        echo "Waiting for SSH to be available..."
+        SSH_READY=false
+        for i in {1..60}; do
+          if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes -o PasswordAuthentication=no -o PubkeyAuthentication=yes -o PreferredAuthentications=publickey ec2-user@$INSTANCE_IP "echo 'SSH ready'" >/dev/null 2>&1; then
+            echo "SSH is ready (attempt $i/60)"
+            SSH_READY=true
+            break
+          fi
+          echo "SSH not ready, waiting... (attempt $i/60)"
+          sleep 15
+        done
+        
+        if [ "$SSH_READY" != "true" ]; then
+          echo "SSH connection failed after 15 minutes"
+          ssh-agent -k
+          rm -f /tmp/ec2_key.pem
+          exit 1
+        fi
+        
+        # Test SSH connection with a simple command
+        echo "Testing SSH connection..."
+        if ! ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o PasswordAuthentication=no -o PubkeyAuthentication=yes ec2-user@$INSTANCE_IP "whoami && uptime"; then
+          echo "SSH connection test failed"
+          ssh-agent -k
+          rm -f /tmp/ec2_key.pem
+          exit 1
+        fi
+        
+        # Copy application files to EC2
+        echo "Copying application files..."
+        if ! scp -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o PasswordAuthentication=no -o PubkeyAuthentication=yes -r axialy-admin-product/ ec2-user@$INSTANCE_IP:~/; then
+          echo "Failed to copy application files"
+          ssh-agent -k
+          rm -f /tmp/ec2_key.pem
+          exit 1
+        fi
+        
+        # Execute deployment on EC2
+        echo "Executing remote deployment commands..."
+        if ! ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o PasswordAuthentication=no -o PubkeyAuthentication=yes ec2-user@$INSTANCE_IP << 'REMOTE_COMMANDS'
+        
+        # Ensure application source directory exists
+        if [ ! -d "~/axialy-admin-product" ]; then
+          echo "Application source directory not found"
+          exit 1
+        fi
         
         # Update system and install packages - FINAL FIX for Amazon Linux 2023
         sudo dnf update -y
@@ -671,8 +593,21 @@ jobs:
         echo "✓ Application deployment completed successfully!"
         
         REMOTE_COMMANDS
+        then
+          echo "Remote deployment commands failed"
+          ssh-agent -k
+          rm -f /tmp/ec2_key.pem
+          exit 1
+        fi
         
-        echo "✓ Deployment completed"
+        # Clean up ssh-agent and temporary files
+        echo "Cleaning up SSH resources..."
+        if [ -n "$SSH_AGENT_PID" ]; then
+          ssh-agent -k
+        fi
+        rm -f /tmp/ec2_key.pem
+        
+        echo "✓ Application deployment completed successfully!"
 
     - name: Test application deployment
       env:
@@ -742,10 +677,6 @@ jobs:
         echo "Access URLs:"
         echo "- Admin Interface: $ADMIN_URL"
         echo ""
-        echo "SSH Access:"
-        echo "- Command: ssh -i ~/.ssh/your_key.pem ec2-user@$INSTANCE_IP"
-        echo "- Key uses passphrase: YES"
-        echo ""
         echo "Default Admin Credentials:"
         echo "- Username: ${{ secrets.ADMIN_DEFAULT_USER }}"
         echo "- Email: ${{ secrets.ADMIN_DEFAULT_EMAIL }}"
@@ -754,6 +685,10 @@ jobs:
         echo "Database Connection:"
         echo "- Connected to: ${{ secrets.DB_HOST }}"
         echo "- Databases: axialy_admin, axialy_ui"
+        echo ""
+        echo "SSH Access:"
+        echo "- Command: ssh -i ~/.ssh/${{ secrets.EC2_KEY_PAIR }}.pem ec2-user@$INSTANCE_IP"
+        echo "- Passphrase: [Use EC2_SSH_PASSPHRASE secret]"
         echo ""
         echo "Next Steps:"
         echo "1. Access the admin interface using the URL above"
@@ -765,7 +700,6 @@ jobs:
         echo "- SSL/HTTPS should be configured for production"
         echo "- Monitor application logs in /var/log/httpd/"
         echo "- Regular security updates recommended"
-        echo "- SSH key uses passphrase protection"
         echo "=================================================="
 
   cleanup:
@@ -803,6 +737,23 @@ jobs:
         if [ "${{ needs.deploy.result }}" == "success" ]; then
           echo "🎉 Axialy Admin deployment completed successfully!"
           echo "Admin interface '${{ env.INSTANCE_IDENTIFIER }}' is ready for use."
+          echo ""
+          echo "Summary of what was deployed:"
+          echo "- EC2 instance with Axialy Admin application"
+          echo "- Security group with HTTP/HTTPS/SSH access"
+          echo "- CloudWatch log group for monitoring"
+          echo "- Application configured with database connection"
+          echo "- Apache and PHP-FPM services running"
+          echo ""
+          echo "You can now:"
+          echo "1. Access the admin interface via the provided URL"
+          echo "2. SSH to the instance using the passphrase-protected key"
+          echo "3. Monitor logs in CloudWatch or on the instance"
         else
           echo "⚠️  Deployment encountered issues. Check the deploy job logs."
+          echo "Common troubleshooting steps:"
+          echo "1. Verify all GitHub secrets are correctly set"
+          echo "2. Check AWS credentials and permissions"
+          echo "3. Ensure SSH key and passphrase are valid"
+          echo "4. Verify database connectivity from the instance"
         fi
