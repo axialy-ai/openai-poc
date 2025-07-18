@@ -288,6 +288,7 @@ jobs:
     - name: Setup SSH with passphrase-protected key
       env:
         INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
       run: |
         echo "Setting up SSH with passphrase-protected key..."
         
@@ -299,74 +300,85 @@ jobs:
         echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/ec2_key.pem
         chmod 600 ~/.ssh/ec2_key.pem
         
-        # Create SSH config to handle the passphrase-protected key
-        cat > ~/.ssh/config << EOF
-        Host ec2-axialy-admin
-            HostName $INSTANCE_IP
-            User ec2-user
-            IdentityFile ~/.ssh/ec2_key.pem
-            StrictHostKeyChecking no
-            UserKnownHostsFile /dev/null
-            ConnectTimeout 30
-            ServerAliveInterval 60
-            ServerAliveCountMax 3
-        EOF
-        chmod 600 ~/.ssh/config
+        # Install expect for handling passphrases
+        sudo apt-get update -qq
+        sudo apt-get install -y expect
         
-        # Install and configure sshpass for passphrase handling
-        sudo apt-get update
-        sudo apt-get install -y sshpass expect
-        
-        # Create expect script for SSH commands with passphrase
-        cat > ~/.ssh/ssh_with_passphrase.exp << 'EOF'
+        # Create improved expect script for SSH commands
+        cat > ~/.ssh/ssh_expect.exp << 'EOF'
         #!/usr/bin/expect -f
-        set timeout 30
+        set timeout 60
         set host [lindex $argv 0]
         set command [lindex $argv 1]
-        set passphrase "$env(EC2_SSH_PASSPHRASE)"
+        set passphrase $env(EC2_SSH_PASSPHRASE)
         
-        spawn ssh $host $command
+        log_user 1
+        
+        spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -i ~/.ssh/ec2_key.pem ec2-user@$host $command
+        
         expect {
             "Enter passphrase for key" {
                 send "$passphrase\r"
+                exp_continue
+            }
+            "Are you sure you want to continue connecting" {
+                send "yes\r"
                 exp_continue
             }
             "$ " {
-                # Already logged in, command completed
+                # Command completed successfully
             }
             timeout {
-                puts "SSH connection timeout"
+                puts stderr "SSH connection timeout after 60 seconds"
                 exit 1
             }
-            eof
+            eof {
+                # Command completed
+            }
         }
-        wait
-        EOF
-        chmod +x ~/.ssh/ssh_with_passphrase.exp
         
-        # Create expect script for SCP with passphrase
-        cat > ~/.ssh/scp_with_passphrase.exp << 'EOF'
+        catch wait result
+        exit [lindex $result 3]
+        EOF
+        chmod +x ~/.ssh/ssh_expect.exp
+        
+        # Create improved expect script for SCP
+        cat > ~/.ssh/scp_expect.exp << 'EOF'
         #!/usr/bin/expect -f
-        set timeout 30
+        set timeout 120
         set source [lindex $argv 0]
         set dest [lindex $argv 1]
-        set passphrase "$env(EC2_SSH_PASSPHRASE)"
+        set passphrase $env(EC2_SSH_PASSPHRASE)
         
-        spawn scp -r $source $dest
+        log_user 1
+        
+        spawn scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r -i ~/.ssh/ec2_key.pem $source $dest
+        
         expect {
             "Enter passphrase for key" {
                 send "$passphrase\r"
                 exp_continue
             }
-            "100%" {
-                # File transfer progress
+            "Are you sure you want to continue connecting" {
+                send "yes\r"
                 exp_continue
             }
-            eof
+            "100%" {
+                exp_continue
+            }
+            timeout {
+                puts stderr "SCP timeout after 120 seconds"
+                exit 1
+            }
+            eof {
+                # Transfer completed
+            }
         }
-        wait
+        
+        catch wait result
+        exit [lindex $result 3]
         EOF
-        chmod +x ~/.ssh/scp_with_passphrase.exp
+        chmod +x ~/.ssh/scp_expect.exp
         
         echo "SSH setup completed"
 
@@ -380,13 +392,15 @@ jobs:
         for i in {1..20}; do
           echo "Testing SSH connection (attempt $i/20)..."
           
-          if expect ~/.ssh/ssh_with_passphrase.exp ec2-axialy-admin "echo 'SSH ready'" 2>/dev/null | grep -q "SSH ready"; then
+          if ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "echo 'SSH ready'" 2>/dev/null | grep -q "SSH ready"; then
             echo "✓ SSH is ready and responding"
             break
           fi
           
           if [ $i -eq 20 ]; then
             echo "❌ SSH failed to become available after 20 attempts"
+            echo "Attempting direct connection test..."
+            ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "echo 'SSH test'" || true
             exit 1
           fi
           
@@ -405,10 +419,6 @@ jobs:
         if [ ! -d "axialy-admin-product" ]; then
           echo "Creating application directory structure..."
           mkdir -p axialy-admin-product/includes
-          
-          # Copy PHP application files (create them from the user_data_template.sh)
-          # Extract the PHP files from the user data template
-          echo "Creating application files..."
           
           # Create the .env file
           cat > axialy-admin-product/.env << EOF
@@ -432,7 +442,7 @@ jobs:
         SMTP_SECURE=${{ secrets.SMTP_SECURE }}
         EOF
           
-          # Create AdminDBConfig.php (extract from user_data_template.sh)
+          # Create AdminDBConfig.php
           cat > axialy-admin-product/includes/AdminDBConfig.php << 'PHP_EOF'
         <?php
         namespace Axialy\AdminConfig;
@@ -477,10 +487,7 @@ jobs:
         }
         PHP_EOF
           
-          # Create the remaining PHP files (admin_login.php, index.php, health.php)
-          # These would be extracted from the user_data_template.sh file sections
-          # For brevity, I'll create simplified versions here
-          
+          # Create basic login page
           cat > axialy-admin-product/admin_login.php << 'LOGIN_EOF'
         <?php
         session_start();
@@ -511,19 +518,48 @@ jobs:
         ?><!DOCTYPE html><html><head><title>Axialy Admin Login</title><style>body{font-family:sans-serif;max-width:400px;margin:50px auto;padding:20px}.error{color:red;margin-bottom:1em}input{width:100%;padding:8px;margin:5px 0;box-sizing:border-box}button{width:100%;padding:10px;background:#007BFF;color:white;border:none;cursor:pointer}</style></head><body><h2>Axialy Admin Login</h2><?php if($error): ?><div class="error"><?= htmlspecialchars($error) ?></div><?php endif; ?><form method="post"><input type="text" name="username" placeholder="Username" required autofocus><input type="password" name="password" placeholder="Password" required><button type="submit">Login</button></form></body></html>
         LOGIN_EOF
           
-          # Add other PHP files similarly...
+          # Create basic index page
+          cat > axialy-admin-product/index.php << 'INDEX_EOF'
+        <?php
+        session_start();
+        require_once __DIR__ . '/includes/AdminDBConfig.php';
+        use Axialy\AdminConfig\AdminDBConfig;
+
+        // Check if initial user exists
+        $db = AdminDBConfig::getInstance()->getPdo();
+        $stmt = $db->prepare("SELECT COUNT(*) FROM admin_users WHERE username = 'caseylide'");
+        $stmt->execute();
+        if (!$stmt->fetchColumn()) {
+            if ($_POST && ($_POST['init_code'] ?? '') === 'Casellio') {
+                $hash = password_hash('Casellio', PASSWORD_DEFAULT);
+                $db->prepare("INSERT INTO admin_users (username, password, email) VALUES ('caseylide', ?, 'caseylide@gmail.com')")->execute([$hash]);
+                header('Location: admin_login.php');
+                exit;
+            }
+            echo '<!DOCTYPE html><html><head><title>Setup</title></head><body><h2>Initial Setup</h2><p>Enter the admin code to initialize the system.</p><form method="post"><input type="password" name="init_code" placeholder="Admin code" required><button type="submit">Initialize</button></form></body></html>';
+            exit;
+        }
+
+        // Check authentication
+        if (empty($_SESSION['admin_user_id']) || empty($_SESSION['admin_session_token'])) {
+            header('Location: admin_login.php');
+            exit;
+        }
+        ?><!DOCTYPE html><html><head><title>Axialy Admin</title><style>body{font-family:sans-serif;max-width:800px;margin:30px auto;padding:20px}</style></head><body><h1>Axialy Admin Dashboard</h1><p>Welcome to the administration panel.</p><p><a href="admin_login.php">Logout</a></p></body></html>
+        INDEX_EOF
+          
           echo "Application files created successfully"
         fi
         
-        # Copy application files to EC2 using expect script
+        # Copy application files to EC2
         echo "Copying application files to EC2..."
-        expect ~/.ssh/scp_with_passphrase.exp axialy-admin-product/ ec2-axialy-admin:~/
+        ~/.ssh/scp_expect.exp axialy-admin-product/ "ec2-user@${{ steps.deploy_ec2.outputs.instance_ip }}:~/"
         
         # Execute deployment commands on EC2
         echo "Executing deployment on EC2..."
-        expect ~/.ssh/ssh_with_passphrase.exp ec2-axialy-admin 'bash -s' << 'REMOTE_COMMANDS'
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" 'bash -s' << 'REMOTE_COMMANDS'
         
-        # Update system and install packages - FINAL FIX for Amazon Linux 2023
+        # Update system and install packages
         sudo dnf update -y
         sudo dnf install -y \
           httpd \
@@ -542,35 +578,13 @@ jobs:
           wget \
           curl
         
-        # Enable mod_headers module for Apache
-        echo "LoadModule headers_module modules/mod_headers.so" | sudo tee -a /etc/httpd/conf/httpd.conf
-        
-        # Configure PHP for production
-        sudo tee /etc/php.ini > /dev/null << 'PHP_CONFIG'
-        [PHP]
-        memory_limit = 256M
-        upload_max_filesize = 50M
-        post_max_size = 50M
-        max_execution_time = 300
-        max_input_time = 300
-        session.gc_maxlifetime = 14400
-        session.cookie_secure = 1
-        session.cookie_httponly = 1
-        session.use_only_cookies = 1
-        expose_php = Off
-        display_errors = Off
-        log_errors = On
-        error_log = /var/log/php-errors.log
-        date.timezone = UTC
-        PHP_CONFIG
-        
         # Start and enable services
         sudo systemctl start httpd
         sudo systemctl enable httpd
         sudo systemctl start php-fpm
         sudo systemctl enable php-fpm
         
-        # Configure Apache virtual host
+        # Configure Apache
         sudo tee /etc/httpd/conf.d/axialy-admin.conf > /dev/null << 'APACHE_CONFIG'
         <VirtualHost *:80>
             DocumentRoot /var/www/html/axialy-admin
@@ -609,33 +623,6 @@ jobs:
         # Deploy application files
         sudo mkdir -p /var/www/html/axialy-admin
         sudo cp -r ~/axialy-admin-product/* /var/www/html/axialy-admin/
-        
-        # Create .htaccess for additional security
-        sudo tee /var/www/html/axialy-admin/.htaccess > /dev/null << 'HTACCESS'
-        # Security headers
-        <IfModule mod_headers.c>
-            Header always set X-Content-Type-Options nosniff
-            Header always set X-Frame-Options DENY
-            Header always set X-XSS-Protection "1; mode=block"
-        </IfModule>
-        
-        # Prevent access to sensitive files
-        <FilesMatch "\.(env|log|ini|conf)$">
-            Order allow,deny
-            Deny from all
-        </FilesMatch>
-        
-        # Directory protection
-        <FilesMatch "^\.">
-            Order allow,deny
-            Deny from all
-        </FilesMatch>
-        
-        # PHP error handling
-        php_flag display_errors Off
-        php_flag log_errors On
-        php_value error_log /var/log/httpd/php-errors.log
-        HTACCESS
         
         # Set proper permissions
         sudo chown -R apache:apache /var/www/html/axialy-admin
@@ -697,7 +684,7 @@ jobs:
         
         # Test if application loads correctly
         echo "Testing application content..."
-        if curl -s "$ADMIN_URL" | grep -q "Admin Login"; then
+        if curl -s "$ADMIN_URL" | grep -q "Admin Login\|Initial Setup"; then
           echo "✓ Admin login page is loading correctly"
         else
           echo "⚠ Admin login page content issue detected"
