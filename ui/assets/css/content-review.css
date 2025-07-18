@@ -1,0 +1,195 @@
+/* content-review.css */
+
+/* The dimmed background overlay */
+.overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0,0,0,0.7);
+    z-index: 1000; 
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* The main form container in the overlay */
+.content-review-form {
+    background-color: #fff;
+    padding: 20px;
+    width: 500px;
+    max-width: 90%;
+    border-radius: 6px;
+    position: relative;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    max-height: 90vh;
+    overflow-y: auto;
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+.content-review-form::-webkit-scrollbar {
+    display: none;
+}
+
+/* Close button “X” in top-right */
+.close-overlay {
+    position: absolute;
+    top: 10px;
+    right: 15px;
+    font-size: 24px;
+    cursor: pointer;
+}
+.close-overlay:hover {
+    color: #444;
+}
+
+/* Headings */
+.content-review-form h2 {
+    margin-top: 0;
+    text-align: center;
+    color: #333;
+}
+.overlay-subtitle {
+    text-align: center;
+    color: #555;
+}
+
+/* Basic labels, fields, etc. */
+label {
+    display: inline-block;
+    font-weight: bold;
+    margin-top: 10px;
+    margin-bottom: 6px;
+    color: #333;
+}
+.required-field::after {
+    content: ' *';
+    color: red;
+}
+
+select, textarea, input[type="text"] {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px;
+    margin-bottom: 12px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+
+textarea:focus, 
+input[type="text"]:focus, 
+select:focus {
+    outline: none;
+    border-color: #007BFF;
+}
+
+/* The informational paragraph */
+.informative-message {
+    font-size: 14px;
+    color: #555;
+    margin-bottom: 15px;
+}
+
+/* The “General / Itemized” form-type section */
+.form-type-selector {
+    margin: 15px 0;
+}
+.form-type-label {
+    display: inline-block;
+    font-weight: bold;
+    margin-bottom: 6px;
+}
+.form-type-options {
+    display: flex;
+    gap: 12px;
+    margin-top: 6px;
+}
+
+/* The block for itemized feedback, hidden or shown */
+.itemized-controls {
+    padding: 12px;
+    border: 1px solid #eee;
+    background-color: #fafafa;
+    margin-top: 10px;
+}
+
+/* The text below the dropdown describing the chosen type */
+.type-description {
+    font-size: 13px;
+    color: #666;
+    margin-bottom: 10px;
+}
+
+/* The “Submit” button */
+.submit-btn {
+    background-color: #007BFF;
+    color: #fff;
+    border: none;
+    padding: 10px 16px;
+    border-radius: 4px;
+    font-size: 16px;
+    cursor: pointer;
+    display: block;
+    margin: 20px auto 0 auto;
+    transition: background-color 0.3s;
+}
+.submit-btn:hover {
+    background-color: #0056b3;
+}
+
+/* Add these near the bottom of content-review.css */
+.preview-record-tile {
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 10px;
+  margin: 8px 0;
+  cursor: pointer;
+  transition: background-color 0.2s, border-color 0.2s;
+}
+.preview-record-tile.selected {
+  background-color: #e0ffe0; /* light greenish */
+  border-color: #57b957;
+}
+.preview-record-tile:hover {
+  background-color: #f3fdfd;
+}
+.preview-record-tile.selected:hover {
+  border: 2px solid #ccc;
+  background-color: #e0ffe0; /* light greenish */
+  border-color: #57b957;
+}
+
+
+
+/* The page-mask spinner for “Processing” feedback */
+.page-mask {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0,0,0,0.5);
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+}
+.spinner {
+    border: 8px solid #f3f3f3;
+    border-top: 8px solid #3498db;
+    border-radius: 50%;
+    width: 48px;
+    height: 48px;
+    animation: spin 1.2s linear infinite;
+}
+.spinner-message {
+    margin-top: 10px;
+    color: #fff;
+    font-size: 16px;
+}
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}

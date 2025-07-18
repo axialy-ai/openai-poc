@@ -1,0 +1,280 @@
+/* /assets/css/focus-areas.css */
+
+/* Focus Areas Ribbon Styling */
+.focus-areas-ribbon {
+    display: flex;
+    align-items: center;
+    background-color: #e9ecef;
+    padding: 10px;
+    border-radius: 5px;
+    margin-bottom: 10px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+.focus-areas-ribbon:hover {
+    background-color: #d4d9df;
+}
+
+/* Global Controls Styling */
+.global-controls {
+    margin-bottom: 15px;
+    text-align: right;
+}
+
+.global-controls button {
+    background-color: #007bff;
+    color: white;
+    padding: 6px 12px;
+    font-size: 14px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+.global-controls button:hover {
+    background-color: #0056b3;
+}
+
+/* Focus Areas Content Styling */
+.focus-areas-content {
+    display: block; /* Initially expanded */
+    padding: 10px;
+    border: 1px solid #d4d9df;
+    border-radius: 5px;
+    background-color: #f8f9fa;
+    transition: max-height 0.3s ease, opacity 0.3s ease;
+    overflow: hidden;
+}
+
+/* Hidden State for Focus Areas Content */
+.focus-areas-content.hidden {
+    max-height: 0;
+    opacity: 0;
+    padding: 0 10px;
+    margin: 0;
+}
+
+/* Focus Areas Search Input Styling */
+#focus-areas-search-input {
+    width: 100%;
+    padding: 10px;
+    font-size: 16px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    margin-bottom: 10px;
+}
+
+/* Open Focus Areas Button Styling */
+#open-focus-areas-btn {
+    background-color: #007bff;
+    color: white;
+    padding: 10px 20px;
+    font-size: 14px;
+    border: none;
+    border-radius: 5px;
+    cursor: not-allowed; /* Initially disabled */
+    margin-bottom: 15px;
+    opacity: 0.6;
+    transition: background-color 0.3s, opacity 0.3s;
+}
+
+#open-focus-areas-btn.enabled {
+    cursor: pointer;
+    opacity: 1;
+}
+
+#open-focus-areas-btn:hover.enabled {
+    background-color: #0056b3;
+}
+
+/* Focus Area Summary Styling */
+.focus-area-summary {
+    border: 1px solid #ddd;
+    padding: 15px;
+    margin-bottom: 10px;
+    border-radius: 8px;
+    background-color: #fff;
+    cursor: pointer;
+    transition: background-color 0.3s, border-color 0.3s;
+}
+
+.focus-area-summary:hover {
+    background-color: #f0f8ff;
+}
+
+.focus-area-summary.selected {
+    border-color: #007bff;
+    background-color: #e6f2ff;
+}
+
+/* Focus Area Summary Header */
+.focus-area-summary-header {
+    background-color: #f5f5f5;
+    padding: 10px;
+    border-bottom: 1px solid #ddd;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+}
+
+.focus-area-summary-header h3 {
+    margin: 0;
+    font-size: 18px;
+    color: #333;
+}
+
+/* Focus Area Summary Subtitle */
+.focus-area-summary-subtitle {
+    padding: 10px;
+    border-bottom: 1px solid #ddd;
+}
+
+.focus-area-summary-subtitle p {
+    margin: 0;
+    color: #666;
+    font-size: 14px;
+}
+
+/* Focus Area Summary Metrics */
+.focus-area-summary-metrics {
+    display: flex;
+    padding: 10px;
+}
+
+.metrics-column {
+    flex: 1;
+}
+
+.metrics-column p {
+    margin: 5px 0;
+}
+
+.metrics-column p strong {
+    color: #333;
+}
+
+/* Focus Area Container Styling */
+#focus-area-container {
+    margin-top: 20px;
+}
+
+/* Focus Area Container Header */
+.focus-area-header h3 {
+    margin: 0;
+    color: #333;
+    font-size: 20px;
+}
+
+/* Focus Area Content Styling */
+.focus-area-content p {
+    margin: 10px 0;
+}
+
+.focus-area-content p strong {
+    color: #007BFF;
+}
+
+/* Analyze Dropdown Menu Styling */
+.analyze-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0; /* Align with the left edge of the button */
+    background-color: #fff;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    z-index: 1000;
+    min-width: 150px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.analyze-dropdown div {
+    padding: 8px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid #eee;
+}
+
+.analyze-dropdown div:last-child {
+    border-bottom: none;
+}
+
+.analyze-dropdown div:hover {
+    background-color: #f5f5f5;
+}
+
+/* Template Directory Styling */
+.template-directory {
+    margin-bottom: 10px;
+    border-left: 2px solid #007bff;
+    padding-left: 10px;
+}
+
+.directory-header {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    margin-bottom: 5px;
+}
+
+.toggle-button {
+    font-size: 16px;
+    margin-right: 5px;
+    user-select: none;
+}
+
+.directory-label {
+    font-weight: bold;
+    color: #007bff;
+}
+
+/* Subtemplates Container Styling */
+.subtemplates-container {
+    margin-left: 15px;
+    border-left: 1px dashed #ccc;
+    padding-left: 10px;
+}
+
+/* Hide subtemplates when .hidden class is applied */
+.subtemplates-container.hidden {
+    display: none;
+}
+
+/* Select All and Unselect All Links Styling */
+.select-all-link, .unselect-all-link {
+    color: #007bff;
+    text-decoration: none;
+    font-size: 12px;
+}
+
+.select-all-link:hover, .unselect-all-link:hover {
+    text-decoration: underline;
+}
+
+/* Checkbox Styling */
+.form-check {
+    margin-bottom: 5px;
+}
+
+.form-check-input {
+    margin-right: 10px;
+}
+
+.form-check-label {
+    font-size: 14px;
+}
+
+/* Global Controls Button Styling */
+.global-controls button {
+    background-color: #007bff;
+    color: white;
+    padding: 6px 12px;
+    font-size: 14px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+.global-controls button:hover {
+    background-color: #0056b3;
+}

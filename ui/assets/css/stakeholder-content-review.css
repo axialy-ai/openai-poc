@@ -1,0 +1,200 @@
+/* stakeholder-content-review.css */
+
+/* Basic page container styling */
+.container {
+    max-width: 800px;
+    margin: 40px auto;
+    font-family: "Segoe UI", Arial, sans-serif;
+    line-height: 1.5;
+}
+
+h1 {
+    text-align: center;
+    font-weight: 400;
+}
+
+.summary {
+    background-color: #fafafa;
+    padding: 15px;
+    border: 1px solid #ddd;
+    margin-bottom: 20px;
+}
+
+.summary p {
+    margin: 6px 0;
+}
+
+.instructions {
+    margin: 20px 0;
+    padding: 10px;
+    background-color: #f0f8ff;
+    border: 1px solid #d7eafb;
+    border-radius: 4px;
+}
+
+/* Data object container */
+.data-object {
+    margin-top: 30px;
+}
+
+.data-object h2 {
+    font-size: 1.2rem;
+    border-bottom: 1px solid #ccc;
+    padding-bottom: 5px;
+}
+
+/* Each record */
+.data-record {
+    padding: 12px;
+    border: 1px solid #ddd;
+    margin-bottom: 12px;
+    background-color: #fdfdfd;
+    transition: border-color 0.3s ease;
+    position: relative;
+}
+
+.data-record h4 {
+    margin-top: 0;
+    font-size: 1.1rem;
+}
+
+.property {
+    margin: 4px 0;
+}
+
+.property-name {
+    font-weight: bold;
+}
+
+/* Buttons (including primary, secondary, submit, etc.) */
+.btn {
+    display: inline-block;
+    padding: 8px 14px;
+    margin: 4px 2px;
+    border: 1px solid #007BFF;
+    background-color: #fff;
+    color: #007BFF;
+    border-radius: 4px;
+    text-decoration: none;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+.btn:hover {
+    background-color: #007BFF;
+    color: #fff;
+}
+
+.action-buttons {
+    margin-top: 10px;
+}
+
+/* .highlighted for clicked button */
+.highlighted {
+    background-color: #007BFF !important;
+    color: #fff !important;
+}
+
+/* The main text area for "General" feedback */
+.general-feedback-text {
+    width: 100%;
+    height: 150px;
+    font-size: 16px;
+    padding: 10px;
+    margin-top: 10px;
+}
+
+/* Overlays */
+.overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.5);
+    display: none;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.overlay-content {
+    background: #fff;
+    padding: 20px;
+    border-radius: 6px;
+    width: 500px;
+    max-width: 90%;
+    position: relative;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+}
+
+.overlay-content h2 {
+    margin-top: 0;
+    font-size: 1.2rem;
+}
+
+.overlay-content textarea {
+    width: 100%;
+    height: 100px;
+    padding: 10px;
+    font-size: 16px;
+    margin-bottom: 10px;
+    border-radius: 4px;
+    border: 1px solid #ccc;
+}
+
+.close-overlay {
+    position: absolute;
+    top: 10px;
+    right: 15px;
+    font-size: 20px;
+    cursor: pointer;
+}
+
+.message {
+    color: green;
+    font-weight: 600;
+    text-align: center;
+}
+
+.error {
+    color: red;
+    font-weight: 600;
+    text-align: center;
+}
+
+.feedback-submitted p {
+    font-style: italic;
+}
+
+/* Page mask for the spinner */
+#page-mask {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0,0,0,0.5);
+    z-index: 2000;
+    display: none; /* hidden by default, shown on submit */
+    justify-content: center;
+    align-items: center;
+    flex-direction: column;
+    text-align: center;
+    color: #fff;
+}
+
+#page-mask .spinner {
+    margin-top: 20px;
+    border: 8px solid #f3f3f3;
+    border-top: 8px solid #fff;
+    border-radius: 50%;
+    width: 60px;
+    height: 60px;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
