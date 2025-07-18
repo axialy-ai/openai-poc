@@ -1,0 +1,22 @@
+{
+  "supportActions": [
+    {
+      "label": "User Documentation",
+      "actionType": "link",
+      "action": "/user-documentation.php",
+      "active": true
+    },
+    {
+      "label": "Support Tickets",
+      "actionType": "js",
+      "action": "openSupportTicketsOverlay()",
+      "active": true
+    },
+    {
+      "label": "Contact Support",
+      "actionType": "[Pending Dev]",
+      "action": "[Pending Dev]",
+      "active": true
+    }
+  ]
+}

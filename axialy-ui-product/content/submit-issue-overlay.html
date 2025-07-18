@@ -1,0 +1,22 @@
+<!-- /app.axialy.ai/content/submit-issue-overlay.html -->
+<div class="overlay" id="submit-issue-overlay" style="display:none;">
+  <div class="overlay-content" style="max-width:500px;">
+    <span class="close-overlay" onclick="closeIssueOverlay()">×</span>
+    <h2>Submit an Issue</h2>
+    <p>Please describe the issue you encountered using Axialy by AxiaBA.</p>
+    <div class="field-container">
+      <label for="issue-title">Short Title</label>
+      <input type="text" id="issue-title" placeholder="Brief title..." />
+    </div>
+    <div class="field-container">
+      <label for="issue-description">Description</label>
+      <textarea id="issue-description" rows="5" placeholder="Detailed description of the issue..."></textarea>
+    </div>
+    <div class="button-container">
+      <button class="overlay-button commit-btn" onclick="submitIssue()">Submit</button>
+      <button class="overlay-button cancel-btn" onclick="closeIssueOverlay()">Cancel</button>
+    </div>
+    <div id="issue-submit-error" style="color:red; margin-top:10px; display:none;"></div>
+    <div id="issue-submit-success" style="color:green; margin-top:10px; display:none;"></div>
+  </div>
+</div>

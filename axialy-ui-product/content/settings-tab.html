@@ -1,0 +1,69 @@
+<!-- /content/settings-tab.html -->
+<div class="container">
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" style="display: none;">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+    </div>
+
+    <div class="toast-container" id="settings-toast-container"></div>
+    
+    <div class="content-wrapper">
+        <h2>Organization Settings</h2>
+        
+        <!-- Focus Organization Selection -->
+        <div class="focus-org-section">
+            <h3>Focus Organization</h3>
+            <p>Select which organization's data to view and modify:</p>
+            <select id="focus-organization" class="focus-org-select">
+                <option value="default">Default (All Organizations)</option>
+                <!-- Custom organizations will be populated here -->
+            </select>
+        </div>
+
+        <!-- Create Custom Organization -->
+        <div class="custom-org-section">
+            <h3>Create Custom Organization</h3>
+            <form id="create-org-form" enctype="multipart/form-data">
+                <div class="form-group">
+                    <label for="org-name">Organization Name*</label>
+                    <input type="text" id="org-name" name="org-name" required>
+                </div>
+                <div class="form-group">
+                    <label for="point-of-contact">Point of Contact</label>
+                    <input type="text" id="point-of-contact" name="point-of-contact">
+                </div>
+                <div class="form-group">
+                    <label for="org-email">Email</label>
+                    <input type="email" id="org-email" name="org-email">
+                </div>
+                <div class="form-group">
+                    <label for="org-phone">Phone</label>
+                    <input type="tel" id="org-phone" name="org-phone">
+                </div>
+                <div class="form-group">
+                    <label for="org-website">Website</label>
+                    <input type="url" id="org-website" name="org-website">
+                </div>
+                <div class="form-group">
+                    <label for="org-notes">Organization Notes</label>
+                    <textarea id="org-notes" name="org-notes" rows="4"></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="org-logo">Organization Logo (.png)</label>
+                    <input type="file" id="org-logo" name="org-logo" accept=".png,.jpg,.jpeg">
+                </div>
+                <button type="submit" class="create-org-btn">Create Organization</button>
+            </form>
+        </div>
+
+        <!-- Existing Organizations List -->
+        <div class="existing-orgs-section">
+            <h3>Your Custom Organizations</h3>
+            <div id="orgs-list" class="orgs-list">
+                <!-- Organizations will be populated here -->
+            </div>
+        </div>
+    </div>
+</div>

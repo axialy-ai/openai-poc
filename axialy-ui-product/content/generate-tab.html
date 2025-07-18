@@ -1,0 +1,62 @@
+<!-- /content/generate-tab.html -->
+<!-- Generate Tab HTML -->
+
+<!-- Input Text Ribbon -->
+<div class="input-ribbon">
+    <span class="toggle-icon">⬆️</span>
+    Input Text:
+</div>
+<div class="text-input-container">
+    <textarea id="multi-line-input" rows="5" placeholder="Describe your analysis scenario here..."></textarea>
+    <!-- Character Counter -->
+    <div id="char-counter">0 / 50,000 characters used</div>
+    
+    <!-- New Elements for Summary Display -->
+    <div class="input-summary">
+        <p id="input-text-title"><strong>Title:</strong> <span id="input-title-display">N/A</span></p>
+        <p id="input-text-summary"><strong>Summary:</strong> <span id="input-summary-display">N/A</span></p>
+        <p id="input-utc-datetime"><strong>UTC DateTime:</strong> <span id="input-utc-display">N/A</span></p>
+        <!-- Version Information -->
+        <div class="version-info">
+            <p><strong>Current Focus Area Version:</strong> <span id="current-focus-area-version">0</span></p>
+        </div>
+    </div>
+</div>
+<!-- End of Input Text Ribbon -->
+
+<!-- "Choose AI Focus Areas" Ribbon -->
+<div class="feedback-ribbon">
+    <span class="toggle-icon" id="toggleChooseFocusRibbon">⬇️</span>
+    Choose AI Focus Areas:
+</div>
+<div class="feedback-content" id="chooseFocusRibbonBody" style="display: none;">
+    <form id="chooseFocusForm">
+        <!-- Templates will be populated here -->
+    </form>
+</div>
+<!-- End of "Choose AI Focus Areas" Ribbon -->
+
+<!-- Process AI-Generated Data Ribbon -->
+<div class="feedback-ribbon">
+    <span class="toggle-icon">⬆️</span>
+    Enhance with AI:
+</div>
+<div class="feedback-content">
+    <p id="focus-area-ai-message">Provide inputs and send to AI when ready.</p>
+    <div style="display: flex; align-items: center;">
+        <button id="send-all-btn">Send Selected</button>
+        <button id="save-data-btn" disabled>Save Data</button>
+        <div id="spinner" class="spinner" role="status" aria-hidden="true"></div> <!-- Spinner added here -->
+    </div>
+</div>
+<!-- End of Process AI-Generated Data Ribbon -->
+
+<!-- New Ribbons Container -->
+<div id="ribbons-container"></div>
+<!-- End of Ribbons Container -->
+
+<!-- Version Information Display -->
+<div class="version-indicator">
+    <span class="version-label">Current Focus Area Version:</span>
+    <span class="version-number" id="overall-focus-area-version">0</span>
+</div>
