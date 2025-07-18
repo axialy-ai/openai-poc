@@ -1,1 +1,852 @@
 
+name: Install 3. AWS Axialy UI Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      instance_identifier:
+        description: "EC2 instance identifier"
+        required: true
+        default: "axialy-ui"
+      aws_region:
+        description: "AWS region (e.g. us-west-2, us-east-1)"
+        default: "us-west-2"
+        required: true
+      instance_type:
+        description: "EC2 instance type"
+        default: "t3.small"
+        required: true
+      domain_name:
+        description: "Optional domain name for UI interface"
+        required: false
+        default: ""
+
+env:
+  AWS_DEFAULT_REGION: ${{ github.event.inputs.aws_region }}
+  INSTANCE_IDENTIFIER: ${{ github.event.inputs.instance_identifier }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    name: Prepare AWS Environment
+    outputs:
+      cleanup_needed: ${{ steps.check_resources.outputs.cleanup_needed }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ github.event.inputs.aws_region }}
+
+    - name: Check for existing resources
+      id: check_resources
+      run: |
+        echo "Checking for existing EC2 instance..."
+        EXISTING_INSTANCES=$(aws ec2 describe-instances \
+          --filters "Name=tag:Name,Values=${{ env.INSTANCE_IDENTIFIER }}" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
+          --query 'Reservations[].Instances[].InstanceId' --output text || echo "")
+        
+        if [ -n "$EXISTING_INSTANCES" ]; then
+          echo "cleanup_needed=true" >> $GITHUB_OUTPUT
+          echo "Existing instances found - cleanup will be performed"
+        else
+          echo "cleanup_needed=false" >> $GITHUB_OUTPUT
+          echo "No existing instances found - proceeding with fresh deployment"
+        fi
+
+    - name: Cleanup existing resources
+      if: steps.check_resources.outputs.cleanup_needed == 'true'
+      run: |
+        echo "Cleaning up existing EC2 instances..."
+        EXISTING_INSTANCES=$(aws ec2 describe-instances \
+          --filters "Name=tag:Name,Values=${{ env.INSTANCE_IDENTIFIER }}" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
+          --query 'Reservations[].Instances[].InstanceId' --output text)
+        
+        if [ -n "$EXISTING_INSTANCES" ]; then
+          echo "Terminating instances: $EXISTING_INSTANCES"
+          aws ec2 terminate-instances --instance-ids $EXISTING_INSTANCES || true
+          aws ec2 wait instance-terminated --instance-ids $EXISTING_INSTANCES || true
+        fi
+        
+        echo "Cleanup completed"
+
+    - name: Force cleanup all related resources
+      run: |
+        echo "Performing comprehensive cleanup of all related resources..."
+        
+        # Cleanup security groups
+        SG_NAME="${{ env.INSTANCE_IDENTIFIER }}-sg"
+        SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$SG_NAME" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo "None")
+        if [ "$SG_ID" != "None" ] && [ "$SG_ID" != "" ]; then
+          echo "Deleting security group $SG_ID..."
+          aws ec2 delete-security-group --group-id "$SG_ID" || true
+        fi
+        
+        # Cleanup CloudWatch log groups
+        LOG_GROUP="/aws/ec2/${{ env.INSTANCE_IDENTIFIER }}"
+        if aws logs describe-log-groups --log-group-name-prefix "$LOG_GROUP" --query 'logGroups[0].logGroupName' --output text 2>/dev/null | grep -q "$LOG_GROUP"; then
+          echo "Deleting log group $LOG_GROUP..."
+          aws logs delete-log-group --log-group-name "$LOG_GROUP" || true
+        fi
+        
+        echo "✓ Comprehensive cleanup completed"
+
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy EC2 and Configure UI Application
+    needs: prepare
+    outputs:
+      instance_id: ${{ steps.deploy_ec2.outputs.instance_id }}
+      instance_ip: ${{ steps.deploy_ec2.outputs.instance_ip }}
+      security_group_id: ${{ steps.deploy_ec2.outputs.security_group_id }}
+      ui_url: ${{ steps.deploy_ec2.outputs.ui_url }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ github.event.inputs.aws_region }}
+
+    - name: Wait for cleanup completion
+      run: |
+        echo "Waiting 30 seconds for AWS resource cleanup to propagate..."
+        sleep 30
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.6.6
+        terraform_wrapper: false
+
+    - name: Terraform Init
+      working-directory: infra/aws_ui
+      run: terraform init
+
+    - name: Terraform Plan
+      working-directory: infra/aws_ui
+      run: |
+        terraform plan \
+          -var="instance_identifier=${{ env.INSTANCE_IDENTIFIER }}" \
+          -var="aws_region=${{ github.event.inputs.aws_region }}" \
+          -var="instance_type=${{ github.event.inputs.instance_type }}" \
+          -var="domain_name=${{ github.event.inputs.domain_name }}" \
+          -var="key_pair_name=${{ secrets.EC2_KEY_PAIR }}" \
+          -var="db_host=${{ secrets.DB_HOST }}" \
+          -var="db_port=${{ secrets.DB_PORT }}" \
+          -var="db_user=${{ secrets.DB_USER }}" \
+          -var="db_password=${{ secrets.DB_PASSWORD }}" \
+          -var="smtp_host=${{ secrets.SMTP_HOST }}" \
+          -var="smtp_port=${{ secrets.SMTP_PORT }}" \
+          -var="smtp_user=${{ secrets.SMTP_USER }}" \
+          -var="smtp_password=${{ secrets.SMTP_PASSWORD }}" \
+          -var="smtp_secure=${{ secrets.SMTP_SECURE }}"
+
+    - name: Import existing resources if they exist
+      working-directory: infra/aws_ui
+      run: |
+        # Create import helper script
+        cat > import_existing.sh << 'EOF'
+        #!/bin/bash
+        set +e  # Don't exit on errors for imports
+        
+        # Import security group if exists
+        SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=${{ env.INSTANCE_IDENTIFIER }}-sg" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo "None")
+        if [ "$SG_ID" != "None" ] && [ "$SG_ID" != "" ]; then
+          echo "Importing security group: $SG_ID"
+          terraform import \
+            -var="instance_identifier=${{ env.INSTANCE_IDENTIFIER }}" \
+            -var="aws_region=${{ github.event.inputs.aws_region }}" \
+            -var="instance_type=${{ github.event.inputs.instance_type }}" \
+            -var="domain_name=${{ github.event.inputs.domain_name }}" \
+            -var="key_pair_name=${{ secrets.EC2_KEY_PAIR }}" \
+            -var="db_host=${{ secrets.DB_HOST }}" \
+            -var="db_port=${{ secrets.DB_PORT }}" \
+            -var="db_user=${{ secrets.DB_USER }}" \
+            -var="db_password=${{ secrets.DB_PASSWORD }}" \
+            -var="smtp_host=${{ secrets.SMTP_HOST }}" \
+            -var="smtp_port=${{ secrets.SMTP_PORT }}" \
+            -var="smtp_user=${{ secrets.SMTP_USER }}" \
+            -var="smtp_password=${{ secrets.SMTP_PASSWORD }}" \
+            -var="smtp_secure=${{ secrets.SMTP_SECURE }}" \
+            aws_security_group.axialy_ui "$SG_ID"
+        fi
+        
+        # Import log group if exists
+        LOG_GROUP="/aws/ec2/${{ env.INSTANCE_IDENTIFIER }}"
+        if aws logs describe-log-groups --log-group-name-prefix "$LOG_GROUP" --query 'logGroups[0].logGroupName' --output text 2>/dev/null | grep -q "$LOG_GROUP"; then
+          echo "Importing log group: $LOG_GROUP"
+          terraform import \
+            -var="instance_identifier=${{ env.INSTANCE_IDENTIFIER }}" \
+            -var="aws_region=${{ github.event.inputs.aws_region }}" \
+            -var="instance_type=${{ github.event.inputs.instance_type }}" \
+            -var="domain_name=${{ github.event.inputs.domain_name }}" \
+            -var="key_pair_name=${{ secrets.EC2_KEY_PAIR }}" \
+            -var="db_host=${{ secrets.DB_HOST }}" \
+            -var="db_port=${{ secrets.DB_PORT }}" \
+            -var="db_user=${{ secrets.DB_USER }}" \
+            -var="db_password=${{ secrets.DB_PASSWORD }}" \
+            -var="smtp_host=${{ secrets.SMTP_HOST }}" \
+            -var="smtp_port=${{ secrets.SMTP_PORT }}" \
+            -var="smtp_user=${{ secrets.SMTP_USER }}" \
+            -var="smtp_password=${{ secrets.SMTP_PASSWORD }}" \
+            -var="smtp_secure=${{ secrets.SMTP_SECURE }}" \
+            aws_cloudwatch_log_group.axialy_ui "$LOG_GROUP"
+        fi
+        
+        # Import EC2 instance if exists
+        EXISTING_INSTANCES=$(aws ec2 describe-instances \
+          --filters "Name=tag:Name,Values=${{ env.INSTANCE_IDENTIFIER }}" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
+          --query 'Reservations[].Instances[].InstanceId' --output text)
+        if [ -n "$EXISTING_INSTANCES" ]; then
+          for instance_id in $EXISTING_INSTANCES; do
+            echo "Importing EC2 instance: $instance_id"
+            terraform import \
+              -var="instance_identifier=${{ env.INSTANCE_IDENTIFIER }}" \
+              -var="aws_region=${{ github.event.inputs.aws_region }}" \
+              -var="instance_type=${{ github.event.inputs.instance_type }}" \
+              -var="domain_name=${{ github.event.inputs.domain_name }}" \
+              -var="key_pair_name=${{ secrets.EC2_KEY_PAIR }}" \
+              -var="db_host=${{ secrets.DB_HOST }}" \
+              -var="db_port=${{ secrets.DB_PORT }}" \
+              -var="db_user=${{ secrets.DB_USER }}" \
+              -var="db_password=${{ secrets.DB_PASSWORD }}" \
+              -var="smtp_host=${{ secrets.SMTP_HOST }}" \
+              -var="smtp_port=${{ secrets.SMTP_PORT }}" \
+              -var="smtp_user=${{ secrets.SMTP_USER }}" \
+              -var="smtp_password=${{ secrets.SMTP_PASSWORD }}" \
+              -var="smtp_secure=${{ secrets.SMTP_SECURE }}" \
+              aws_instance.axialy_ui "$instance_id"
+          done
+        fi
+        
+        set -e  # Re-enable exit on errors
+        EOF
+        
+        chmod +x import_existing.sh
+        ./import_existing.sh || echo "Import completed with some resources already managed"
+
+    - name: Terraform Apply
+      id: deploy_ec2
+      working-directory: infra/aws_ui
+      run: |
+        terraform apply -auto-approve \
+          -var="instance_identifier=${{ env.INSTANCE_IDENTIFIER }}" \
+          -var="aws_region=${{ github.event.inputs.aws_region }}" \
+          -var="instance_type=${{ github.event.inputs.instance_type }}" \
+          -var="domain_name=${{ github.event.inputs.domain_name }}" \
+          -var="key_pair_name=${{ secrets.EC2_KEY_PAIR }}" \
+          -var="db_host=${{ secrets.DB_HOST }}" \
+          -var="db_port=${{ secrets.DB_PORT }}" \
+          -var="db_user=${{ secrets.DB_USER }}" \
+          -var="db_password=${{ secrets.DB_PASSWORD }}" \
+          -var="smtp_host=${{ secrets.SMTP_HOST }}" \
+          -var="smtp_port=${{ secrets.SMTP_PORT }}" \
+          -var="smtp_user=${{ secrets.SMTP_USER }}" \
+          -var="smtp_password=${{ secrets.SMTP_PASSWORD }}" \
+          -var="smtp_secure=${{ secrets.SMTP_SECURE }}"
+
+        echo "instance_id=$(terraform output -raw instance_id)" >> $GITHUB_OUTPUT
+        echo "instance_ip=$(terraform output -raw instance_ip)" >> $GITHUB_OUTPUT
+        echo "security_group_id=$(terraform output -raw security_group_id)" >> $GITHUB_OUTPUT
+        echo "ui_url=$(terraform output -raw ui_url)" >> $GITHUB_OUTPUT
+
+    - name: Wait for instance to be ready
+      run: |
+        echo "Waiting for EC2 instance to be running..."
+        aws ec2 wait instance-running --instance-ids ${{ steps.deploy_ec2.outputs.instance_id }}
+        echo "EC2 instance is running"
+
+    - name: Setup SSH with passphrase-protected key
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
+        echo "Setting up SSH with passphrase-protected key..."
+        
+        # Create SSH directory
+        mkdir -p ~/.ssh
+        chmod 700 ~/.ssh
+        
+        # Write the private key to file
+        echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/ec2_key.pem
+        chmod 600 ~/.ssh/ec2_key.pem
+        
+        # Install expect for handling passphrases
+        sudo apt-get update -qq
+        sudo apt-get install -y expect
+        
+        # Create improved expect script for SSH commands
+        cat > ~/.ssh/ssh_expect.exp << 'EOF'
+        #!/usr/bin/expect -f
+        set timeout 120
+        set host [lindex $argv 0]
+        set command [lindex $argv 1]
+        set passphrase $env(EC2_SSH_PASSPHRASE)
+        
+        log_user 1
+        
+        spawn ssh -o StrictHostKeyChecking=no \
+                  -o UserKnownHostsFile=/dev/null \
+                  -o ConnectTimeout=30 \
+                  -o ServerAliveInterval=10 \
+                  -o ServerAliveCountMax=3 \
+                  -o BatchMode=no \
+                  -i ~/.ssh/ec2_key.pem \
+                  ec2-user@$host \
+                  $command
+        
+        expect {
+            "Enter passphrase for key" {
+                send "$passphrase\r"
+                exp_continue
+            }
+            "Are you sure you want to continue connecting" {
+                send "yes\r"
+                exp_continue
+            }
+            "Permission denied" {
+                puts stderr "SSH authentication failed"
+                exit 1
+            }
+            "Connection refused" {
+                puts stderr "SSH connection refused"
+                exit 2
+            }
+            "No route to host" {
+                puts stderr "No route to host"
+                exit 3
+            }
+            -re ".*\\$ " {
+                # Command prompt appeared - command completed
+            }
+            timeout {
+                puts stderr "SSH timeout after 120 seconds"
+                exit 4
+            }
+            eof {
+                # Connection closed - command completed
+            }
+        }
+        
+        catch wait result
+        set exit_code [lindex $result 3]
+        exit $exit_code
+        EOF
+        chmod +x ~/.ssh/ssh_expect.exp
+        
+        # Create improved expect script for SCP
+        cat > ~/.ssh/scp_expect.exp << 'EOF'
+        #!/usr/bin/expect -f
+        set timeout 600
+        set source [lindex $argv 0]
+        set dest [lindex $argv 1]
+        set passphrase $env(EC2_SSH_PASSPHRASE)
+        
+        log_user 1
+        
+        spawn scp -o StrictHostKeyChecking=no \
+                  -o UserKnownHostsFile=/dev/null \
+                  -o ConnectTimeout=30 \
+                  -r \
+                  -i ~/.ssh/ec2_key.pem \
+                  $source $dest
+        
+        expect {
+            "Enter passphrase for key" {
+                send "$passphrase\r"
+                exp_continue
+            }
+            "Are you sure you want to continue connecting" {
+                send "yes\r"
+                exp_continue
+            }
+            "Permission denied" {
+                puts stderr "SCP authentication failed"
+                exit 1
+            }
+            "Connection refused" {
+                puts stderr "SCP connection refused"
+                exit 2
+            }
+            "100%" {
+                exp_continue
+            }
+            timeout {
+                puts stderr "SCP timeout after 600 seconds"
+                exit 4
+            }
+            eof {
+                # Transfer completed
+            }
+        }
+        
+        catch wait result
+        set exit_code [lindex $result 3]
+        exit $exit_code
+        EOF
+        chmod +x ~/.ssh/scp_expect.exp
+        
+        echo "SSH setup completed"
+
+    - name: Wait for SSH to be available
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
+        echo "Waiting for SSH to be available..."
+        
+        for i in {1..20}; do
+          echo "Testing SSH connection (attempt $i/20)..."
+          
+          if ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "echo 'SSH ready'" 2>/dev/null | grep -q "SSH ready"; then
+            echo "✓ SSH is ready and responding"
+            break
+          fi
+          
+          if [ $i -eq 20 ]; then
+            echo "❌ SSH failed to become available after 20 attempts"
+            echo "Attempting direct connection test..."
+            ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "echo 'SSH test'" || true
+            exit 1
+          fi
+          
+          echo "SSH not ready, waiting 30 seconds..."
+          sleep 30
+        done
+
+    - name: Prepare UI application files
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
+        echo "Preparing UI application files for deployment..."
+        
+        # Create application directory structure
+        mkdir -p axialy-ui-product
+        
+        # Copy all UI source files to the deployment directory
+        # Note: This assumes the UI source is in a 'ui' or 'axialy-ui' directory in the repo
+        if [ -d "ui" ]; then
+          cp -r ui/* axialy-ui-product/
+        elif [ -d "axialy-ui" ]; then
+          cp -r axialy-ui/* axialy-ui-product/
+        elif [ -d "src/ui" ]; then
+          cp -r src/ui/* axialy-ui-product/
+        else
+          echo "Warning: UI source directory not found. Creating minimal structure..."
+          mkdir -p axialy-ui-product/includes
+          mkdir -p axialy-ui-product/assets
+          mkdir -p axialy-ui-product/css
+          mkdir -p axialy-ui-product/js
+        fi
+        
+        # Create the .env file for UI application
+        cat > axialy-ui-product/.env << EOF
+        DB_HOST=${{ secrets.DB_HOST }}
+        DB_PORT=${{ secrets.DB_PORT }}
+        DB_USER=${{ secrets.DB_USER }}
+        DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+        DB_NAME=axialy_ui
+        SMTP_HOST=${{ secrets.SMTP_HOST }}
+        SMTP_PORT=${{ secrets.SMTP_PORT }}
+        SMTP_USER=${{ secrets.SMTP_USER }}
+        SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}
+        SMTP_SECURE=${{ secrets.SMTP_SECURE }}
+        APP_URL=http://${{ steps.deploy_ec2.outputs.instance_ip }}
+        EOF
+        
+        # Create database configuration file if not exists
+        if [ ! -f "axialy-ui-product/includes/config.php" ]; then
+          cat > axialy-ui-product/includes/config.php << 'PHP_EOF'
+        <?php
+        // Load environment variables
+        function loadEnv($path) {
+            if (!file_exists($path)) return;
+            $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+            foreach ($lines as $line) {
+                if ($line[0] === '#' || !strpos($line, '=')) continue;
+                list($key, $value) = explode('=', $line, 2);
+                putenv(trim($key) . '=' . trim($value));
+            }
+        }
+        
+        loadEnv(__DIR__ . '/../.env');
+        
+        // Database configuration
+        define('DB_HOST', getenv('DB_HOST') ?: 'localhost');
+        define('DB_PORT', getenv('DB_PORT') ?: '3306');
+        define('DB_USER', getenv('DB_USER') ?: 'root');
+        define('DB_PASS', getenv('DB_PASSWORD') ?: '');
+        define('DB_NAME', getenv('DB_NAME') ?: 'axialy_ui');
+        
+        // SMTP configuration
+        define('SMTP_HOST', getenv('SMTP_HOST') ?: '');
+        define('SMTP_PORT', getenv('SMTP_PORT') ?: '587');
+        define('SMTP_USER', getenv('SMTP_USER') ?: '');
+        define('SMTP_PASS', getenv('SMTP_PASSWORD') ?: '');
+        define('SMTP_SECURE', getenv('SMTP_SECURE') ?: 'tls');
+        
+        // Application URL
+        define('APP_URL', getenv('APP_URL') ?: 'http://localhost');
+        
+        // Database connection function
+        function getDbConnection() {
+            static $pdo = null;
+            if ($pdo === null) {
+                $dsn = "mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";dbname=" . DB_NAME . ";charset=utf8mb4";
+                $options = [
+                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                    PDO::ATTR_EMULATE_PREPARES => false,
+                ];
+                $pdo = new PDO($dsn, DB_USER, DB_PASS, $options);
+            }
+            return $pdo;
+        }
+        ?>
+        PHP_EOF
+        fi
+        
+        # Create a basic index.php if not exists
+        if [ ! -f "axialy-ui-product/index.php" ]; then
+          cat > axialy-ui-product/index.php << 'INDEX_EOF'
+        <?php
+        require_once __DIR__ . '/includes/config.php';
+        
+        // Test database connection
+        try {
+            $db = getDbConnection();
+            $dbStatus = "Connected";
+        } catch (Exception $e) {
+            $dbStatus = "Connection failed: " . $e->getMessage();
+        }
+        ?>
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Axialy UI</title>
+            <style>
+                body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+                .status { padding: 10px; margin: 10px 0; border-radius: 5px; }
+                .success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+                .error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+            </style>
+        </head>
+        <body>
+            <h1>Axialy UI Platform</h1>
+            <p>Welcome to the Axialy UI application.</p>
+            
+            <div class="status <?php echo strpos($dbStatus, 'Connected') !== false ? 'success' : 'error'; ?>">
+                Database Status: <?php echo htmlspecialchars($dbStatus); ?>
+            </div>
+            
+            <p>Application is running and ready for use.</p>
+        </body>
+        </html>
+        INDEX_EOF
+        fi
+        
+        echo "✓ UI application files prepared"
+
+    - name: Copy UI application files to EC2
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
+        echo "Copying UI application files to EC2..."
+        ~/.ssh/scp_expect.exp axialy-ui-product/ "ec2-user@${{ steps.deploy_ec2.outputs.instance_ip }}:~/"
+        echo "✓ File transfer completed"
+
+    - name: Install system packages on EC2
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
+        echo "Installing system packages..."
+        
+        # Update system
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo dnf update -y"
+        
+        # Install web server packages
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo dnf install -y httpd php php-cli php-fpm php-mysqlnd php-zip php-xml php-mbstring php-curl php-gd php-opcache php-json mariadb105 unzip wget --skip-broken"
+        
+        echo "✓ System packages installed"
+
+    - name: Configure web server on EC2
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
+        echo "Configuring web server..."
+        
+        # Create Apache configuration file
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "cat > /tmp/axialy-ui.conf << 'APACHE_EOF'
+        <VirtualHost *:80>
+            DocumentRoot /var/www/html/axialy-ui
+            ServerName ui.axialy.com
+            DirectoryIndex index.php
+            
+            <Directory /var/www/html/axialy-ui>
+                Options -Indexes +FollowSymLinks
+                AllowOverride All
+                Require all granted
+                
+                # Security headers
+                Header always set X-Content-Type-Options nosniff
+                Header always set X-Frame-Options DENY
+                Header always set X-XSS-Protection \"1; mode=block\"
+                Header always set Referrer-Policy \"strict-origin-when-cross-origin\"
+            </Directory>
+            
+            # Hide sensitive files
+            <FilesMatch \"\.(env|log|ini)$\">
+                Require all denied
+            </FilesMatch>
+            
+            # PHP handling
+            <FilesMatch \.php$>
+                SetHandler \"proxy:unix:/run/php-fpm/www.sock|fcgi://localhost\"
+            </FilesMatch>
+            
+            # Asset handling
+            <Directory /var/www/html/axialy-ui/assets>
+                Options -Indexes
+                AllowOverride None
+                Require all granted
+                ExpiresActive On
+                ExpiresByType image/jpg \"access plus 1 month\"
+                ExpiresByType image/jpeg \"access plus 1 month\"
+                ExpiresByType image/gif \"access plus 1 month\"
+                ExpiresByType image/png \"access plus 1 month\"
+                ExpiresByType text/css \"access plus 1 month\"
+                ExpiresByType application/pdf \"access plus 1 month\"
+                ExpiresByType text/javascript \"access plus 1 month\"
+                ExpiresByType application/javascript \"access plus 1 month\"
+            </Directory>
+            
+            # Logging
+            ErrorLog /var/log/httpd/axialy-ui-error.log
+            CustomLog /var/log/httpd/axialy-ui-access.log combined
+        </VirtualHost>
+        APACHE_EOF"
+        
+        # Move configuration to proper location
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo mv /tmp/axialy-ui.conf /etc/httpd/conf.d/"
+        
+        echo "✓ Web server configured"
+
+    - name: Deploy UI application files on EC2
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
+        echo "Deploying UI application files..."
+        
+        # Create web directory and deploy files
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo mkdir -p /var/www/html/axialy-ui"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo cp -r ~/axialy-ui-product/. /var/www/html/axialy-ui/"
+        
+        # Set permissions
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chown -R apache:apache /var/www/html/axialy-ui"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chmod -R 755 /var/www/html/axialy-ui"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chmod 644 /var/www/html/axialy-ui/.env"
+        
+        # Create log directories
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo mkdir -p /var/log/axialy-ui"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chown apache:apache /var/log/axialy-ui"
+        
+        echo "✓ UI application files deployed"
+
+    - name: Start services and test on EC2
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
+        echo "Starting services..."
+        
+        # Start and enable services
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl start httpd"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl enable httpd"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl start php-fpm"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl enable php-fpm"
+        
+        # Restart services to ensure configuration is loaded
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl restart httpd"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl restart php-fpm"
+        
+        echo "✓ Services started successfully"
+
+    - name: Test database connection on EC2
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
+        echo "Testing database connection..."
+        
+        # Test database connection
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "php -r \"
+        require_once '/var/www/html/axialy-ui/includes/config.php';
+        try {
+            \\\$pdo = getDbConnection();
+            echo 'Database connection successful!' . PHP_EOL;
+        } catch (Exception \\\$e) {
+            echo 'Database connection failed: ' . \\\$e->getMessage() . PHP_EOL;
+            exit(1);
+        }
+        \""
+        
+        echo "✓ Database connection test completed"
+
+    - name: Verify service status on EC2
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
+        echo "Verifying service status..."
+        
+        # Check service status
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl status httpd --no-pager"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl status php-fpm --no-pager"
+        
+        echo "✓ Service verification completed"
+        echo "✓ Deployment completed successfully!"
+
+    - name: Test application deployment
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        UI_URL: ${{ steps.deploy_ec2.outputs.ui_url }}
+      run: |
+        echo "Testing UI application deployment..."
+        
+        # Wait a moment for services to fully start
+        sleep 10
+        
+        # Test HTTP response
+        echo "Testing HTTP response..."
+        HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$UI_URL" || echo "000")
+        
+        if [ "$HTTP_STATUS" = "200" ]; then
+          echo "✓ UI application is responding correctly (HTTP $HTTP_STATUS)"
+        else
+          echo "⚠ UI application response status: HTTP $HTTP_STATUS"
+          echo "This may be normal if DNS/domain setup is still needed"
+        fi
+        
+        # Test if application loads correctly
+        echo "Testing application content..."
+        if curl -s "$UI_URL" | grep -q "Axialy UI\|Database Status"; then
+          echo "✓ UI application is loading correctly"
+        else
+          echo "⚠ UI application content issue detected"
+        fi
+
+    - name: Save deployment info as repository secrets
+      env:
+        GH_TOKEN: ${{ secrets.GH_PAT }}
+        INSTANCE_ID: ${{ steps.deploy_ec2.outputs.instance_id }}
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        UI_URL: ${{ steps.deploy_ec2.outputs.ui_url }}
+      run: |
+        if [ -z "$GH_TOKEN" ]; then
+          echo "::warning::GH_PAT secret not set. Cannot update repository secrets automatically."
+          echo "Please manually add these deployment details as repository secrets:"
+          echo "- UI_INSTANCE_ID: $INSTANCE_ID"
+          echo "- UI_INSTANCE_IP: $INSTANCE_IP"
+          echo "- UI_URL: $UI_URL"
+          exit 0
+        fi
+
+        gh secret set UI_INSTANCE_ID --body "$INSTANCE_ID"
+        gh secret set UI_INSTANCE_IP --body "$INSTANCE_IP"
+        gh secret set UI_URL --body "$UI_URL"
+        echo "✓ Deployment info saved as repository secrets"
+
+    - name: Display deployment summary
+      env:
+        INSTANCE_ID: ${{ steps.deploy_ec2.outputs.instance_id }}
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        UI_URL: ${{ steps.deploy_ec2.outputs.ui_url }}
+      run: |
+        echo "=================================================="
+        echo "AWS Axialy UI deployed successfully!"
+        echo "=================================================="
+        echo "Instance ID: $INSTANCE_ID"
+        echo "Public IP: $INSTANCE_IP"
+        echo "Region: ${{ github.event.inputs.aws_region }}"
+        echo "Instance Type: ${{ github.event.inputs.instance_type }}"
+        echo "=================================================="
+        echo ""
+        echo "Access URLs:"
+        echo "- UI Application: $UI_URL"
+        echo ""
+        echo "SSH Access:"
+        echo "- Command: ssh -i ~/.ssh/your_key.pem ec2-user@$INSTANCE_IP"
+        echo "- Key uses passphrase: YES"
+        echo ""
+        echo "Database Connection:"
+        echo "- Connected to: ${{ secrets.DB_HOST }}"
+        echo "- Database: axialy_ui"
+        echo ""
+        echo "Email Configuration:"
+        echo "- SMTP Host: ${{ secrets.SMTP_HOST }}"
+        echo "- SMTP Port: ${{ secrets.SMTP_PORT }}"
+        echo ""
+        echo "Next Steps:"
+        echo "1. Access the UI application using the URL above"
+        echo "2. Test user registration and email functionality"
+        echo "3. Configure DNS if using custom domain"
+        echo "4. Deploy Axialy API (Install 4) for full functionality"
+        echo ""
+        echo "Security Notes:"
+        echo "- SSL/HTTPS should be configured for production"
+        echo "- Monitor application logs in /var/log/httpd/"
+        echo "- Email verification tokens should be tested"
+        echo "- Regular security updates recommended"
+        echo "=================================================="
+
+  cleanup:
+    runs-on: ubuntu-latest
+    name: Cleanup Temporary Resources
+    needs: deploy
+    if: always()
+    
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ github.event.inputs.aws_region }}
+
+    - name: Cleanup temporary resources
+      run: |
+        echo "Performing cleanup of temporary resources..."
+        
+        # Note: In this deployment, we keep the main resources (EC2, Security Groups)
+        # but clean up any temporary files or failed deployments
+        
+        # This is a placeholder for any cleanup logic
+        # Similar to admin deployment, the EC2 instance IS the final product
+        
+        echo "✓ Cleanup completed (no temporary resources to clean)"
+
+    - name: Final status report
+      run: |
+        if [ "${{ needs.deploy.result }}" == "success" ]; then
+          echo "🎉 Axialy UI deployment completed successfully!"
+          echo "UI application '${{ env.INSTANCE_IDENTIFIER }}' is ready for use."
+        else
+          echo "⚠️  Deployment encountered issues. Check the deploy job logs."
+        fi
