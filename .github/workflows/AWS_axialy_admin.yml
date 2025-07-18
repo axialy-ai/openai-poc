@@ -1,4 +1,4 @@
-name: Pillar 2. AWS Axialy Admin Deployment
+name: Install 2. AWS Axialy Admin Deployment
 
 on:
   workflow_dispatch:
