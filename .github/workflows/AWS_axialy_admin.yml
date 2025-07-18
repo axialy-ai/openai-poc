@@ -445,6 +445,51 @@ jobs:
           sleep 30
         done
 
+    - name: Get latest database credentials
+      id: get_db_creds
+      run: |
+        echo "Getting latest database credentials from RDS..."
+        
+        # Get the RDS instance details
+        DB_INSTANCE_ID="axialy-database"  # matches your DB workflow
+        
+        # Get the endpoint
+        DB_HOST=$(aws rds describe-db-instances \
+          --db-instance-identifier "$DB_INSTANCE_ID" \
+          --query 'DBInstances[0].Endpoint.Address' \
+          --output text)
+        
+        DB_PORT=$(aws rds describe-db-instances \
+          --db-instance-identifier "$DB_INSTANCE_ID" \
+          --query 'DBInstances[0].Endpoint.Port' \
+          --output text)
+        
+        DB_USER=$(aws rds describe-db-instances \
+          --db-instance-identifier "$DB_INSTANCE_ID" \
+          --query 'DBInstances[0].MasterUsername' \
+          --output text)
+        
+        # Use the password from the updated GitHub secret
+        DB_PASSWORD="${{ secrets.DB_PASSWORD }}"
+        
+        # Test the connection
+        echo "Testing database connection..."
+        sudo apt-get install -y mysql-client-8.0
+        
+        if mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" \
+            --ssl-mode=REQUIRED --connect-timeout=10 -e "SELECT 1;" > /dev/null 2>&1; then
+          echo "✓ Database connection successful"
+        else
+          echo "❌ Database connection failed - credentials may be outdated"
+          echo "Please ensure the database workflow completed successfully before running this workflow"
+          exit 1
+        fi
+        
+        echo "db_host=$DB_HOST" >> $GITHUB_OUTPUT
+        echo "db_port=$DB_PORT" >> $GITHUB_OUTPUT
+        echo "db_user=$DB_USER" >> $GITHUB_OUTPUT
+        echo "db_password=$DB_PASSWORD" >> $GITHUB_OUTPUT
+
     - name: Prepare application files
       env:
         INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
@@ -455,17 +500,17 @@ jobs:
         # Create application directory structure
         mkdir -p axialy-admin-product/includes
         
-        # Create the .env file
+        # Create the .env file with validated database credentials
         cat > axialy-admin-product/.env << EOF
-        DB_HOST=${{ secrets.DB_HOST }}
-        DB_PORT=${{ secrets.DB_PORT }}
-        DB_USER=${{ secrets.DB_USER }}
-        DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+        DB_HOST=${{ steps.get_db_creds.outputs.db_host }}
+        DB_PORT=${{ steps.get_db_creds.outputs.db_port }}
+        DB_USER=${{ steps.get_db_creds.outputs.db_user }}
+        DB_PASSWORD=${{ steps.get_db_creds.outputs.db_password }}
         DB_NAME=axialy_admin
-        UI_DB_HOST=${{ secrets.DB_HOST }}
-        UI_DB_PORT=${{ secrets.DB_PORT }}
-        UI_DB_USER=${{ secrets.DB_USER }}
-        UI_DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+        UI_DB_HOST=${{ steps.get_db_creds.outputs.db_host }}
+        UI_DB_PORT=${{ steps.get_db_creds.outputs.db_port }}
+        UI_DB_USER=${{ steps.get_db_creds.outputs.db_user }}
+        UI_DB_PASSWORD=${{ steps.get_db_creds.outputs.db_password }}
         UI_DB_NAME=axialy_ui
         ADMIN_DEFAULT_USER=${{ secrets.ADMIN_DEFAULT_USER }}
         ADMIN_DEFAULT_EMAIL=${{ secrets.ADMIN_DEFAULT_EMAIL }}
