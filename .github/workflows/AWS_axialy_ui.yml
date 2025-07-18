@@ -109,6 +109,19 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    - name: Verify UI source exists
+      run: |
+        echo "Verifying UI source directory exists at /axialy-ui-product..."
+        if [ ! -d "axialy-ui-product" ]; then
+          echo "ERROR: axialy-ui-product directory not found!"
+          echo "Available directories in repo root:"
+          ls -la
+          exit 1
+        fi
+        echo "✓ UI source directory found"
+        echo "Contents of axialy-ui-product:"
+        find axialy-ui-product -type f -name "*.php" | head -10
+
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
@@ -430,140 +443,51 @@ jobs:
       run: |
         echo "Preparing UI application files for deployment..."
         
-        # Create application directory structure
-        mkdir -p axialy-ui-product
-        
-        # Copy all UI source files to the deployment directory
-        # Note: This checks multiple possible locations for UI source
-        if [ -d "ui" ]; then
-          echo "Found UI source in 'ui/' directory"
-          cp -r ui/* axialy-ui-product/
-        elif [ -d "axialy-ui" ]; then
-          echo "Found UI source in 'axialy-ui/' directory"
-          cp -r axialy-ui/* axialy-ui-product/
-        elif [ -d "src/axialy-ui-product" ]; then
-          echo "Found UI source in 'src/axialy-ui-product/' directory"
-          cp -r src/axialy-ui-product/* axialy-ui-product/
-        elif [ -d "src/ui" ]; then
-          echo "Found UI source in 'src/ui/' directory"
-          cp -r src/ui/* axialy-ui-product/
-        else
-          echo "Warning: UI source directory not found. Creating minimal structure..."
-          mkdir -p axialy-ui-product/includes
-          mkdir -p axialy-ui-product/assets
-          mkdir -p axialy-ui-product/css
-          mkdir -p axialy-ui-product/js
+        # Verify axialy-ui-product directory exists (as required)
+        if [ ! -d "axialy-ui-product" ]; then
+          echo "ERROR: axialy-ui-product directory not found at repo root!"
+          echo "Available directories:"
+          ls -la
+          exit 1
         fi
+        
+        echo "✓ Found axialy-ui-product source directory"
+        echo "Contents:"
+        ls -la axialy-ui-product/ | head -10
         
         # Create the .env file for UI application
         cat > axialy-ui-product/.env << EOF
+        # Database configuration for UI
+        UI_DB_HOST=${{ secrets.DB_HOST }}
+        UI_DB_PORT=${{ secrets.DB_PORT }}
+        UI_DB_USER=${{ secrets.DB_USER }}
+        UI_DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+        UI_DB_NAME=axialy_ui
+        
+        # Legacy database config (for backward compatibility)
         DB_HOST=${{ secrets.DB_HOST }}
         DB_PORT=${{ secrets.DB_PORT }}
         DB_USER=${{ secrets.DB_USER }}
         DB_PASSWORD=${{ secrets.DB_PASSWORD }}
         DB_NAME=axialy_ui
+        
+        # SMTP configuration
         SMTP_HOST=${{ secrets.SMTP_HOST }}
         SMTP_PORT=${{ secrets.SMTP_PORT }}
         SMTP_USER=${{ secrets.SMTP_USER }}
         SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}
         SMTP_SECURE=${{ secrets.SMTP_SECURE }}
-        APP_URL=http://${{ steps.deploy_ec2.outputs.instance_ip }}
+        
+        # Application URLs
+        APP_BASE_URL=http://${{ steps.deploy_ec2.outputs.instance_ip }}
+        API_BASE_URL=
+        INTERNAL_API_KEY=
+        
+        # Version
+        APP_VERSION=1.0.0
         EOF
         
-        # Create database configuration file if not exists
-        if [ ! -f "axialy-ui-product/includes/config.php" ]; then
-          cat > axialy-ui-product/includes/config.php << 'PHP_EOF'
-        <?php
-        // Load environment variables
-        function loadEnv($path) {
-            if (!file_exists($path)) return;
-            $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-            foreach ($lines as $line) {
-                if ($line[0] === '#' || !strpos($line, '=')) continue;
-                list($key, $value) = explode('=', $line, 2);
-                putenv(trim($key) . '=' . trim($value));
-            }
-        }
-        
-        loadEnv(__DIR__ . '/../.env');
-        
-        // Database configuration
-        define('DB_HOST', getenv('DB_HOST') ?: 'localhost');
-        define('DB_PORT', getenv('DB_PORT') ?: '3306');
-        define('DB_USER', getenv('DB_USER') ?: 'root');
-        define('DB_PASS', getenv('DB_PASSWORD') ?: '');
-        define('DB_NAME', getenv('DB_NAME') ?: 'axialy_ui');
-        
-        // SMTP configuration
-        define('SMTP_HOST', getenv('SMTP_HOST') ?: '');
-        define('SMTP_PORT', getenv('SMTP_PORT') ?: '587');
-        define('SMTP_USER', getenv('SMTP_USER') ?: '');
-        define('SMTP_PASS', getenv('SMTP_PASSWORD') ?: '');
-        define('SMTP_SECURE', getenv('SMTP_SECURE') ?: 'tls');
-        
-        // Application URL
-        define('APP_URL', getenv('APP_URL') ?: 'http://localhost');
-        
-        // Database connection function
-        function getDbConnection() {
-            static $pdo = null;
-            if ($pdo === null) {
-                $dsn = "mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";dbname=" . DB_NAME . ";charset=utf8mb4";
-                $options = [
-                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-                    PDO::ATTR_EMULATE_PREPARES => false,
-                ];
-                $pdo = new PDO($dsn, DB_USER, DB_PASS, $options);
-            }
-            return $pdo;
-        }
-        ?>
-        PHP_EOF
-        fi
-        
-        # Create a basic index.php if not exists
-        if [ ! -f "axialy-ui-product/index.php" ]; then
-          cat > axialy-ui-product/index.php << 'INDEX_EOF'
-        <?php
-        require_once __DIR__ . '/includes/config.php';
-        
-        // Test database connection
-        try {
-            $db = getDbConnection();
-            $dbStatus = "Connected";
-        } catch (Exception $e) {
-            $dbStatus = "Connection failed: " . $e->getMessage();
-        }
-        ?>
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Axialy UI</title>
-            <style>
-                body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
-                .status { padding: 10px; margin: 10px 0; border-radius: 5px; }
-                .success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-                .error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-            </style>
-        </head>
-        <body>
-            <h1>Axialy UI Platform</h1>
-            <p>Welcome to the Axialy UI application.</p>
-            
-            <div class="status <?php echo strpos($dbStatus, 'Connected') !== false ? 'success' : 'error'; ?>">
-                Database Status: <?php echo htmlspecialchars($dbStatus); ?>
-            </div>
-            
-            <p>Application is running and ready for use.</p>
-        </body>
-        </html>
-        INDEX_EOF
-        fi
-        
-        echo "✓ UI application files prepared"
+        echo "✓ UI application files prepared with correct .env"
 
     - name: Copy UI application files to EC2
       env:
@@ -584,8 +508,8 @@ jobs:
         # Update system
         ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo dnf update -y"
         
-        # Install web server packages
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo dnf install -y httpd php php-cli php-fpm php-mysqlnd php-zip php-xml php-mbstring php-curl php-gd php-opcache php-json mariadb105 unzip wget --skip-broken"
+        # Install web server packages (matching admin exactly)
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo dnf install -y httpd php php-cli php-fpm php-mysqlnd php-zip php-xml php-mbstring php-curl php-gd php-opcache mariadb105 unzip wget --skip-broken"
         
         echo "✓ System packages installed"
 
@@ -596,12 +520,12 @@ jobs:
       run: |
         echo "Configuring web server..."
         
-        # Create Apache configuration file
+        # Create Apache configuration file (matching admin pattern)
         ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "cat > /tmp/axialy-ui.conf << 'APACHE_EOF'
         <VirtualHost *:80>
             DocumentRoot /var/www/html/axialy-ui
             ServerName ui.axialy.com
-            DirectoryIndex index.php
+            DirectoryIndex login.php index.php
             
             <Directory /var/www/html/axialy-ui>
                 Options -Indexes +FollowSymLinks
@@ -612,6 +536,7 @@ jobs:
                 Header always set X-Content-Type-Options nosniff
                 Header always set X-Frame-Options DENY
                 Header always set X-XSS-Protection \"1; mode=block\"
+                Header always set Strict-Transport-Security \"max-age=31536000; includeSubDomains\"
                 Header always set Referrer-Policy \"strict-origin-when-cross-origin\"
             </Directory>
             
@@ -625,22 +550,6 @@ jobs:
                 SetHandler \"proxy:unix:/run/php-fpm/www.sock|fcgi://localhost\"
             </FilesMatch>
             
-            # Asset handling
-            <Directory /var/www/html/axialy-ui/assets>
-                Options -Indexes
-                AllowOverride None
-                Require all granted
-                ExpiresActive On
-                ExpiresByType image/jpg \"access plus 1 month\"
-                ExpiresByType image/jpeg \"access plus 1 month\"
-                ExpiresByType image/gif \"access plus 1 month\"
-                ExpiresByType image/png \"access plus 1 month\"
-                ExpiresByType text/css \"access plus 1 month\"
-                ExpiresByType application/pdf \"access plus 1 month\"
-                ExpiresByType text/javascript \"access plus 1 month\"
-                ExpiresByType application/javascript \"access plus 1 month\"
-            </Directory>
-            
             # Logging
             ErrorLog /var/log/httpd/axialy-ui-error.log
             CustomLog /var/log/httpd/axialy-ui-access.log combined
@@ -649,6 +558,9 @@ jobs:
         
         # Move configuration to proper location
         ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo mv /tmp/axialy-ui.conf /etc/httpd/conf.d/"
+        
+        # Enable mod_headers for security headers
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "echo 'LoadModule headers_module modules/mod_headers.so' | sudo tee -a /etc/httpd/conf/httpd.conf"
         
         echo "✓ Web server configured"
 
@@ -659,11 +571,11 @@ jobs:
       run: |
         echo "Deploying UI application files..."
         
-        # Create web directory and deploy files
+        # Create web directory and deploy files (matching admin exactly)
         ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo mkdir -p /var/www/html/axialy-ui"
         ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo cp -r ~/axialy-ui-product/. /var/www/html/axialy-ui/"
         
-        # Set permissions
+        # Set permissions (matching admin exactly)
         ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chown -R apache:apache /var/www/html/axialy-ui"
         ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chmod -R 755 /var/www/html/axialy-ui"
         ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chmod 644 /var/www/html/axialy-ui/.env"
@@ -681,7 +593,7 @@ jobs:
       run: |
         echo "Starting services..."
         
-        # Start and enable services
+        # Start and enable services (matching admin exactly)
         ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl start httpd"
         ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl enable httpd"
         ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl start php-fpm"
@@ -700,12 +612,13 @@ jobs:
       run: |
         echo "Testing database connection..."
         
-        # Test database connection
+        # Test database connection with the UI's expected configuration
         ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "php -r \"
-        require_once '/var/www/html/axialy-ui/includes/config.php';
+        require_once '/var/www/html/axialy-ui/includes/db_connection.php';
         try {
-            \\\$pdo = getDbConnection();
             echo 'Database connection successful!' . PHP_EOL;
+            echo 'Connected to: ' . getenv('UI_DB_HOST') . ':' . getenv('UI_DB_PORT') . PHP_EOL;
+            echo 'Database: ' . getenv('UI_DB_NAME') . PHP_EOL;
         } catch (Exception \\\$e) {
             echo 'Database connection failed: ' . \\\$e->getMessage() . PHP_EOL;
             exit(1);
@@ -713,6 +626,87 @@ jobs:
         \""
         
         echo "✓ Database connection test completed"
+
+    - name: Create database tables on EC2
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
+        echo "Ensuring required database tables exist..."
+        
+        # Create a script to ensure required tables exist
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "cat > /tmp/ensure_tables.php << 'PHP_EOF'
+        <?php
+        require_once '/var/www/html/axialy-ui/includes/db_connection.php';
+        
+        try {
+            // Create email_verifications table if it doesn't exist
+            \\\$pdo->exec(\"
+                CREATE TABLE IF NOT EXISTS email_verifications (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    email VARCHAR(255) NOT NULL,
+                    token VARCHAR(64) NOT NULL UNIQUE,
+                    expires_at DATETIME NOT NULL,
+                    used TINYINT(1) DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_token (token),
+                    INDEX idx_email (email)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            \");
+            
+            // Create ui_user_sessions table if it doesn't exist
+            \\\$pdo->exec(\"
+                CREATE TABLE IF NOT EXISTS ui_user_sessions (
+                    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT UNSIGNED NOT NULL,
+                    session_token CHAR(64) NOT NULL UNIQUE,
+                    product VARCHAR(20) DEFAULT 'ui',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    expires_at DATETIME NOT NULL,
+                    INDEX idx_user_id (user_id),
+                    INDEX idx_token (session_token),
+                    INDEX idx_product (product)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            \");
+            
+            // Create documents table if it doesn't exist (for TOS)
+            \\\$pdo->exec(\"
+                CREATE TABLE IF NOT EXISTS documents (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    doc_key VARCHAR(50) NOT NULL UNIQUE,
+                    title VARCHAR(255) NOT NULL,
+                    active_version_id INT DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            \");
+            
+            // Create user_agreement_acceptances table if it doesn't exist
+            \\\$pdo->exec(\"
+                CREATE TABLE IF NOT EXISTS user_agreement_acceptances (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT UNSIGNED NOT NULL,
+                    document_versions_id INT NOT NULL,
+                    accepted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    ip_address VARCHAR(45),
+                    user_agent TEXT,
+                    UNIQUE KEY unique_user_version (user_id, document_versions_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            \");
+            
+            echo 'All required tables ensured to exist.' . PHP_EOL;
+            
+        } catch (Exception \\\$e) {
+            echo 'Error ensuring tables: ' . \\\$e->getMessage() . PHP_EOL;
+            exit(1);
+        }
+        ?>
+        PHP_EOF"
+        
+        # Run the table creation script
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "php /tmp/ensure_tables.php"
+        
+        echo "✓ Database tables ensured"
 
     - name: Verify service status on EC2
       env:
@@ -725,6 +719,10 @@ jobs:
         ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl status httpd --no-pager"
         ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl status php-fpm --no-pager"
         
+        # Check if files are in place (like admin does)
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "ls -la /var/www/html/axialy-ui/ | head -10"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "ls -la /var/www/html/axialy-ui/includes/ | head -5"
+        
         echo "✓ Service verification completed"
         echo "✓ Deployment completed successfully!"
 
@@ -736,26 +734,64 @@ jobs:
         echo "Testing UI application deployment..."
         
         # Wait a moment for services to fully start
-        sleep 10
+        sleep 15
         
-        # Test HTTP response
-        echo "Testing HTTP response..."
-        HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$UI_URL" || echo "000")
+        # Test HTTP response to login page (matching admin pattern)
+        echo "Testing HTTP response to login page..."
+        HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$UI_URL/login.php" || echo "000")
         
         if [ "$HTTP_STATUS" = "200" ]; then
-          echo "✓ UI application is responding correctly (HTTP $HTTP_STATUS)"
+          echo "✓ UI login page is responding correctly (HTTP $HTTP_STATUS)"
         else
-          echo "⚠ UI application response status: HTTP $HTTP_STATUS"
-          echo "This may be normal if DNS/domain setup is still needed"
+          echo "⚠ UI login page response status: HTTP $HTTP_STATUS"
+          echo "Checking error logs..."
+          ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo tail -20 /var/log/httpd/axialy-ui-error.log" || true
+          ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo tail -10 /var/log/php_errors.log" || true
         fi
         
-        # Test if application loads correctly
+        # Test root URL
+        echo "Testing root URL..."
+        ROOT_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$UI_URL" || echo "000")
+        echo "Root URL status: HTTP $ROOT_STATUS"
+        
+        # Test if login page loads correctly (matching admin check)
         echo "Testing application content..."
-        if curl -s "$UI_URL" | grep -q "Axialy UI\|Database Status"; then
-          echo "✓ UI application is loading correctly"
+        if curl -s "$UI_URL/login.php" | grep -q "AxiaBA Login\|login-container"; then
+          echo "✓ UI login page is loading correctly"
         else
-          echo "⚠ UI application content issue detected"
+          echo "⚠ UI login page content issue detected"
         fi
+
+    - name: Debug and troubleshoot issues
+      if: failure()
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
+        echo "Deployment failed - collecting debug information..."
+        
+        # Check Apache error logs
+        echo "=== Apache Error Log ==="
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo tail -50 /var/log/httpd/error_log" || true
+        
+        echo "=== UI Error Log ==="
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo tail -50 /var/log/httpd/axialy-ui-error.log" || true
+        
+        # Check PHP error logs
+        echo "=== PHP Error Log ==="
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo tail -50 /var/log/php_errors.log" || true
+        
+        # Check file permissions
+        echo "=== File Permissions ==="
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "ls -la /var/www/html/axialy-ui/" || true
+        
+        # Check if PHP files are accessible
+        echo "=== PHP File Test ==="
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "php -l /var/www/html/axialy-ui/login.php" || true
+        
+        # Check Apache configuration
+        echo "=== Apache Config Test ==="
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo httpd -t" || true
 
     - name: Save deployment info as repository secrets
       env:
@@ -794,7 +830,8 @@ jobs:
         echo "=================================================="
         echo ""
         echo "Access URLs:"
-        echo "- UI Application: $UI_URL"
+        echo "- UI Login Page: $UI_URL/login.php"
+        echo "- UI Application: $UI_URL (redirects to login)"
         echo ""
         echo "SSH Access:"
         echo "- Command: ssh -i ~/.ssh/your_key.pem ec2-user@$INSTANCE_IP"
@@ -809,16 +846,22 @@ jobs:
         echo "- SMTP Port: ${{ secrets.SMTP_PORT }}"
         echo ""
         echo "Next Steps:"
-        echo "1. Access the UI application using the URL above"
-        echo "2. Test user registration and email functionality"
-        echo "3. Configure DNS if using custom domain"
-        echo "4. Deploy Axialy API (Install 4) for full functionality"
+        echo "1. Access the UI login page: $UI_URL/login.php"
+        echo "2. Create a new account using the email verification flow"
+        echo "3. Test user registration and email functionality"
+        echo "4. Configure DNS if using custom domain"
+        echo "5. Deploy Axialy API (Install 4) for full functionality"
         echo ""
         echo "Security Notes:"
         echo "- SSL/HTTPS should be configured for production"
         echo "- Monitor application logs in /var/log/httpd/"
         echo "- Email verification tokens should be tested"
         echo "- Regular security updates recommended"
+        echo ""
+        echo "Troubleshooting:"
+        echo "- Check logs: ssh to server and run 'sudo tail -f /var/log/httpd/axialy-ui-error.log'"
+        echo "- Check PHP errors: 'sudo tail -f /var/log/php_errors.log'"
+        echo "- Verify database connection from server"
         echo "=================================================="
 
   cleanup:
@@ -852,6 +895,11 @@ jobs:
         if [ "${{ needs.deploy.result }}" == "success" ]; then
           echo "🎉 Axialy UI deployment completed successfully!"
           echo "UI application '${{ env.INSTANCE_IDENTIFIER }}' is ready for use."
+          echo "Access the login page at: ${{ needs.deploy.outputs.ui_url }}/login.php"
         else
           echo "⚠️  Deployment encountered issues. Check the deploy job logs."
+          echo "Common troubleshooting steps:"
+          echo "1. Check if axialy-ui-product directory exists in repo root"
+          echo "2. Verify database credentials are correct"
+          echo "3. Check EC2 instance logs for PHP/Apache errors"
         fi
