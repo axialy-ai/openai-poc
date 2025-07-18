@@ -320,36 +320,25 @@ jobs:
         # Create expect script for SSH commands with passphrase
         cat > ~/.ssh/ssh_with_passphrase.exp << 'EOF'
         #!/usr/bin/expect -f
-        set timeout 60
+        set timeout 30
         set host [lindex $argv 0]
         set command [lindex $argv 1]
         set passphrase "$env(EC2_SSH_PASSPHRASE)"
         
         spawn ssh $host $command
         expect {
-            "Enter passphrase for key*" {
+            "Enter passphrase for key" {
                 send "$passphrase\r"
                 exp_continue
             }
-            "Are you sure you want to continue connecting*" {
-                send "yes\r"
-                exp_continue
-            }
             "$ " {
-                # Command prompt ready
-                interact
-            }
-            "Last login*" {
-                # Successfully logged in
-                interact
+                # Already logged in, command completed
             }
             timeout {
-                puts "SSH connection timeout after 60 seconds"
+                puts "SSH connection timeout"
                 exit 1
             }
-            eof {
-                # Command completed
-            }
+            eof
         }
         wait
         EOF
@@ -358,32 +347,22 @@ jobs:
         # Create expect script for SCP with passphrase
         cat > ~/.ssh/scp_with_passphrase.exp << 'EOF'
         #!/usr/bin/expect -f
-        set timeout 60
+        set timeout 30
         set source [lindex $argv 0]
         set dest [lindex $argv 1]
         set passphrase "$env(EC2_SSH_PASSPHRASE)"
         
         spawn scp -r $source $dest
         expect {
-            "Enter passphrase for key*" {
+            "Enter passphrase for key" {
                 send "$passphrase\r"
-                exp_continue
-            }
-            "Are you sure you want to continue connecting*" {
-                send "yes\r"
                 exp_continue
             }
             "100%" {
                 # File transfer progress
                 exp_continue
             }
-            timeout {
-                puts "SCP connection timeout after 60 seconds"
-                exit 1
-            }
-            eof {
-                # Transfer completed
-            }
+            eof
         }
         wait
         EOF
@@ -401,62 +380,13 @@ jobs:
         for i in {1..20}; do
           echo "Testing SSH connection (attempt $i/20)..."
           
-          # Use a simpler test command that exits immediately
-          if timeout 30 expect -c "
-            set timeout 30
-            spawn ssh -o ConnectTimeout=10 ec2-axialy-admin \"echo SSH_TEST_SUCCESS\"
-            expect {
-              \"Enter passphrase for key*\" {
-                send \"${{ secrets.EC2_SSH_PASSPHRASE }}\r\"
-                exp_continue
-              }
-              \"Are you sure you want to continue connecting*\" {
-                send \"yes\r\"
-                exp_continue
-              }
-              \"SSH_TEST_SUCCESS\" {
-                puts \"SSH connection successful\"
-                exit 0
-              }
-              timeout {
-                puts \"SSH timeout on attempt $i\"
-                exit 1
-              }
-              eof {
-                exit 0
-              }
-            }
-          " 2>/dev/null; then
+          if expect ~/.ssh/ssh_with_passphrase.exp ec2-axialy-admin "echo 'SSH ready'" 2>/dev/null | grep -q "SSH ready"; then
             echo "✓ SSH is ready and responding"
             break
           fi
           
           if [ $i -eq 20 ]; then
             echo "❌ SSH failed to become available after 20 attempts"
-            echo "Last attempt output:"
-            timeout 30 expect -c "
-              set timeout 30
-              spawn ssh -v ec2-axialy-admin \"echo SSH_TEST_SUCCESS\"
-              expect {
-                \"Enter passphrase for key*\" {
-                  send \"${{ secrets.EC2_SSH_PASSPHRASE }}\r\"
-                  exp_continue
-                }
-                \"Are you sure you want to continue connecting*\" {
-                  send \"yes\r\"
-                  exp_continue
-                }
-                \"SSH_TEST_SUCCESS\" {
-                  exit 0
-                }
-                timeout {
-                  exit 1
-                }
-                eof {
-                  exit 0
-                }
-              }
-            " || true
             exit 1
           fi
           
@@ -589,205 +519,158 @@ jobs:
         echo "Copying application files to EC2..."
         expect ~/.ssh/scp_with_passphrase.exp axialy-admin-product/ ec2-axialy-admin:~/
         
-        # Execute deployment commands on EC2 using a here-document approach
+        # Execute deployment commands on EC2
         echo "Executing deployment on EC2..."
+        expect ~/.ssh/ssh_with_passphrase.exp ec2-axialy-admin 'bash -s' << 'REMOTE_COMMANDS'
         
-        # Create deployment script locally first
-        cat > deploy_script.sh << 'DEPLOY_SCRIPT'
-#!/bin/bash
-set -e
-
-echo "Starting deployment on EC2..."
-
-# Update system and install packages - FINAL FIX for Amazon Linux 2023
-sudo dnf update -y
-sudo dnf install -y \
-  httpd \
-  php \
-  php-cli \
-  php-fpm \
-  php-mysqlnd \
-  php-zip \
-  php-xml \
-  php-mbstring \
-  php-curl \
-  php-gd \
-  php-opcache \
-  mariadb105 \
-  unzip \
-  wget \
-  curl
-
-echo "Packages installed successfully"
-
-# Enable mod_headers module for Apache
-echo "LoadModule headers_module modules/mod_headers.so" | sudo tee -a /etc/httpd/conf/httpd.conf
-
-# Configure PHP for production
-sudo tee /etc/php.ini > /dev/null << 'PHP_CONFIG'
-[PHP]
-memory_limit = 256M
-upload_max_filesize = 50M
-post_max_size = 50M
-max_execution_time = 300
-max_input_time = 300
-session.gc_maxlifetime = 14400
-session.cookie_secure = 1
-session.cookie_httponly = 1
-session.use_only_cookies = 1
-expose_php = Off
-display_errors = Off
-log_errors = On
-error_log = /var/log/php-errors.log
-date.timezone = UTC
-PHP_CONFIG
-
-echo "PHP configured successfully"
-
-# Start and enable services
-sudo systemctl start httpd
-sudo systemctl enable httpd
-sudo systemctl start php-fpm
-sudo systemctl enable php-fpm
-
-echo "Services started successfully"
-
-# Configure Apache virtual host
-sudo tee /etc/httpd/conf.d/axialy-admin.conf > /dev/null << 'APACHE_CONFIG'
-<VirtualHost *:80>
-    DocumentRoot /var/www/html/axialy-admin
-    ServerName admin.axialy.com
-    DirectoryIndex index.php admin_login.php
-    
-    <Directory /var/www/html/axialy-admin>
-        Options -Indexes +FollowSymLinks
-        AllowOverride All
-        Require all granted
+        # Update system and install packages - FINAL FIX for Amazon Linux 2023
+        sudo dnf update -y
+        sudo dnf install -y \
+          httpd \
+          php \
+          php-cli \
+          php-fpm \
+          php-mysqlnd \
+          php-zip \
+          php-xml \
+          php-mbstring \
+          php-curl \
+          php-gd \
+          php-opcache \
+          mariadb105 \
+          unzip \
+          wget \
+          curl
         
+        # Enable mod_headers module for Apache
+        echo "LoadModule headers_module modules/mod_headers.so" | sudo tee -a /etc/httpd/conf/httpd.conf
+        
+        # Configure PHP for production
+        sudo tee /etc/php.ini > /dev/null << 'PHP_CONFIG'
+        [PHP]
+        memory_limit = 256M
+        upload_max_filesize = 50M
+        post_max_size = 50M
+        max_execution_time = 300
+        max_input_time = 300
+        session.gc_maxlifetime = 14400
+        session.cookie_secure = 1
+        session.cookie_httponly = 1
+        session.use_only_cookies = 1
+        expose_php = Off
+        display_errors = Off
+        log_errors = On
+        error_log = /var/log/php-errors.log
+        date.timezone = UTC
+        PHP_CONFIG
+        
+        # Start and enable services
+        sudo systemctl start httpd
+        sudo systemctl enable httpd
+        sudo systemctl start php-fpm
+        sudo systemctl enable php-fpm
+        
+        # Configure Apache virtual host
+        sudo tee /etc/httpd/conf.d/axialy-admin.conf > /dev/null << 'APACHE_CONFIG'
+        <VirtualHost *:80>
+            DocumentRoot /var/www/html/axialy-admin
+            ServerName admin.axialy.com
+            DirectoryIndex index.php admin_login.php
+            
+            <Directory /var/www/html/axialy-admin>
+                Options -Indexes +FollowSymLinks
+                AllowOverride All
+                Require all granted
+                
+                # Security headers
+                Header always set X-Content-Type-Options nosniff
+                Header always set X-Frame-Options DENY
+                Header always set X-XSS-Protection "1; mode=block"
+                Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+                Header always set Referrer-Policy "strict-origin-when-cross-origin"
+            </Directory>
+            
+            # Hide sensitive files
+            <FilesMatch "\.(env|log|ini)$">
+                Require all denied
+            </FilesMatch>
+            
+            # PHP handling
+            <FilesMatch \.php$>
+                SetHandler "proxy:unix:/run/php-fpm/www.sock|fcgi://localhost"
+            </FilesMatch>
+            
+            # Logging
+            ErrorLog /var/log/httpd/axialy-admin-error.log
+            CustomLog /var/log/httpd/axialy-admin-access.log combined
+        </VirtualHost>
+        APACHE_CONFIG
+        
+        # Deploy application files
+        sudo mkdir -p /var/www/html/axialy-admin
+        sudo cp -r ~/axialy-admin-product/* /var/www/html/axialy-admin/
+        
+        # Create .htaccess for additional security
+        sudo tee /var/www/html/axialy-admin/.htaccess > /dev/null << 'HTACCESS'
         # Security headers
-        Header always set X-Content-Type-Options nosniff
-        Header always set X-Frame-Options DENY
-        Header always set X-XSS-Protection "1; mode=block"
-        Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
-        Header always set Referrer-Policy "strict-origin-when-cross-origin"
-    </Directory>
-    
-    # Hide sensitive files
-    <FilesMatch "\.(env|log|ini)$">
-        Require all denied
-    </FilesMatch>
-    
-    # PHP handling
-    <FilesMatch \.php$>
-        SetHandler "proxy:unix:/run/php-fpm/www.sock|fcgi://localhost"
-    </FilesMatch>
-    
-    # Logging
-    ErrorLog /var/log/httpd/axialy-admin-error.log
-    CustomLog /var/log/httpd/axialy-admin-access.log combined
-</VirtualHost>
-APACHE_CONFIG
-
-echo "Apache configured successfully"
-
-# Deploy application files
-sudo mkdir -p /var/www/html/axialy-admin
-sudo cp -r ~/axialy-admin-product/* /var/www/html/axialy-admin/
-
-echo "Application files deployed successfully"
-
-# Create .htaccess for additional security
-sudo tee /var/www/html/axialy-admin/.htaccess > /dev/null << 'HTACCESS'
-# Security headers
-<IfModule mod_headers.c>
-    Header always set X-Content-Type-Options nosniff
-    Header always set X-Frame-Options DENY
-    Header always set X-XSS-Protection "1; mode=block"
-</IfModule>
-
-# Prevent access to sensitive files
-<FilesMatch "\.(env|log|ini|conf)$">
-    Order allow,deny
-    Deny from all
-</FilesMatch>
-
-# Directory protection
-<FilesMatch "^\.">
-    Order allow,deny
-    Deny from all
-</FilesMatch>
-
-# PHP error handling
-php_flag display_errors Off
-php_flag log_errors On
-php_value error_log /var/log/httpd/php-errors.log
-HTACCESS
-
-# Set proper permissions
-sudo chown -R apache:apache /var/www/html/axialy-admin
-sudo chmod -R 755 /var/www/html/axialy-admin
-sudo chmod 600 /var/www/html/axialy-admin/.env
-
-# Create log directories
-sudo mkdir -p /var/log/axialy-admin
-sudo chown apache:apache /var/log/axialy-admin
-
-echo "Permissions set successfully"
-
-# Test database connection
-echo "Testing database connection..."
-php -r "
-require_once '/var/www/html/axialy-admin/includes/AdminDBConfig.php';
-use Axialy\AdminConfig\AdminDBConfig;
-try {
-    \$pdo = AdminDBConfig::getInstance()->getPdo();
-    echo 'Database connection successful!' . PHP_EOL;
-} catch (Exception \$e) {
-    echo 'Database connection failed: ' . \$e->getMessage() . PHP_EOL;
-    exit(1);
-}
-"
-
-# Restart services
-sudo systemctl restart httpd
-sudo systemctl restart php-fpm
-
-# Verify services are running
-sudo systemctl status httpd --no-pager
-sudo systemctl status php-fpm --no-pager
-
-echo "✓ Application deployment completed successfully!"
-DEPLOY_SCRIPT
+        <IfModule mod_headers.c>
+            Header always set X-Content-Type-Options nosniff
+            Header always set X-Frame-Options DENY
+            Header always set X-XSS-Protection "1; mode=block"
+        </IfModule>
         
-        # Copy the deployment script to EC2
-        expect ~/.ssh/scp_with_passphrase.exp deploy_script.sh ec2-axialy-admin:~/
+        # Prevent access to sensitive files
+        <FilesMatch "\.(env|log|ini|conf)$">
+            Order allow,deny
+            Deny from all
+        </FilesMatch>
         
-        # Execute the deployment script on EC2
-        timeout 600 expect -c "
-          set timeout 600
-          spawn ssh ec2-axialy-admin \"chmod +x ~/deploy_script.sh && ~/deploy_script.sh\"
-          expect {
-            \"Enter passphrase for key*\" {
-              send \"${{ secrets.EC2_SSH_PASSPHRASE }}\r\"
-              exp_continue
-            }
-            \"Are you sure you want to continue connecting*\" {
-              send \"yes\r\"
-              exp_continue
-            }
-            \"✓ Application deployment completed successfully!\" {
-              puts \"Deployment completed successfully\"
-              exit 0
-            }
-            timeout {
-              puts \"Deployment timeout after 600 seconds\"
-              exit 1
-            }
-            eof {
-              exit 0
-            }
-          }
+        # Directory protection
+        <FilesMatch "^\.">
+            Order allow,deny
+            Deny from all
+        </FilesMatch>
+        
+        # PHP error handling
+        php_flag display_errors Off
+        php_flag log_errors On
+        php_value error_log /var/log/httpd/php-errors.log
+        HTACCESS
+        
+        # Set proper permissions
+        sudo chown -R apache:apache /var/www/html/axialy-admin
+        sudo chmod -R 755 /var/www/html/axialy-admin
+        sudo chmod 600 /var/www/html/axialy-admin/.env
+        
+        # Create log directories
+        sudo mkdir -p /var/log/axialy-admin
+        sudo chown apache:apache /var/log/axialy-admin
+        
+        # Test database connection
+        echo "Testing database connection..."
+        php -r "
+        require_once '/var/www/html/axialy-admin/includes/AdminDBConfig.php';
+        use Axialy\AdminConfig\AdminDBConfig;
+        try {
+            \$pdo = AdminDBConfig::getInstance()->getPdo();
+            echo 'Database connection successful!' . PHP_EOL;
+        } catch (Exception \$e) {
+            echo 'Database connection failed: ' . \$e->getMessage() . PHP_EOL;
+            exit(1);
+        }
         "
+        
+        # Restart services
+        sudo systemctl restart httpd
+        sudo systemctl restart php-fpm
+        
+        # Verify services are running
+        sudo systemctl status httpd --no-pager
+        sudo systemctl status php-fpm --no-pager
+        
+        echo "✓ Application deployment completed successfully!"
+        
+        REMOTE_COMMANDS
         
         echo "✓ Deployment completed"
 
