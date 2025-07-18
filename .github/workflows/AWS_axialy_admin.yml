@@ -286,191 +286,191 @@ jobs:
         echo "EC2 instance is running"
 
     - name: Deploy application to EC2
-          env:
-            INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
-          run: |
-            echo "Deploying Axialy Admin application to EC2 instance..."
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+      run: |
+        echo "Deploying Axialy Admin application to EC2 instance..."
+        
+        # Setup SSH agent and add passphrase-protected key
+        eval $(ssh-agent -s)
+        echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > /tmp/ec2_key.pem
+        chmod 600 /tmp/ec2_key.pem
+        
+        # Add key to ssh-agent with passphrase
+        export DISPLAY=:0.0
+        echo "${{ secrets.EC2_SSH_PASSPHRASE }}" | SSH_ASKPASS=/bin/echo setsid ssh-add /tmp/ec2_key.pem
+        
+        # Wait for SSH to be available
+        echo "Waiting for SSH to be available..."
+        for i in {1..60}; do
+          if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 ec2-user@$INSTANCE_IP "echo 'SSH ready'" 2>/dev/null; then
+            echo "SSH is ready"
+            break
+          fi
+          echo "SSH not ready, waiting... (attempt $i/60)"
+          sleep 15
+        done
+        
+        # Copy application files to EC2
+        scp -o StrictHostKeyChecking=no -r axialy-admin-product/ ec2-user@$INSTANCE_IP:~/
+        
+        # Execute deployment on EC2
+        ssh -o StrictHostKeyChecking=no ec2-user@$INSTANCE_IP << 'REMOTE_COMMANDS'
+        
+        # Update system and install packages - FINAL FIX for Amazon Linux 2023
+        sudo dnf update -y
+        sudo dnf install -y \
+          httpd \
+          php \
+          php-cli \
+          php-fpm \
+          php-mysqlnd \
+          php-zip \
+          php-xml \
+          php-mbstring \
+          php-curl \
+          php-gd \
+          php-opcache \
+          mariadb105 \
+          unzip \
+          wget \
+          curl
+        
+        # Enable mod_headers module for Apache
+        echo "LoadModule headers_module modules/mod_headers.so" | sudo tee -a /etc/httpd/conf/httpd.conf
+        
+        # Configure PHP for production
+        sudo tee /etc/php.ini > /dev/null << 'PHP_CONFIG'
+        [PHP]
+        memory_limit = 256M
+        upload_max_filesize = 50M
+        post_max_size = 50M
+        max_execution_time = 300
+        max_input_time = 300
+        session.gc_maxlifetime = 14400
+        session.cookie_secure = 1
+        session.cookie_httponly = 1
+        session.use_only_cookies = 1
+        expose_php = Off
+        display_errors = Off
+        log_errors = On
+        error_log = /var/log/php-errors.log
+        date.timezone = UTC
+        PHP_CONFIG
+        
+        # Start and enable services
+        sudo systemctl start httpd
+        sudo systemctl enable httpd
+        sudo systemctl start php-fpm
+        sudo systemctl enable php-fpm
+        
+        # Configure Apache virtual host
+        sudo tee /etc/httpd/conf.d/axialy-admin.conf > /dev/null << 'APACHE_CONFIG'
+        <VirtualHost *:80>
+            DocumentRoot /var/www/html/axialy-admin
+            ServerName admin.axialy.com
+            DirectoryIndex index.php admin_login.php
             
-            # Setup SSH agent and add passphrase-protected key
-            eval $(ssh-agent -s)
-            echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > /tmp/ec2_key.pem
-            chmod 600 /tmp/ec2_key.pem
-            
-            # Add key to ssh-agent with passphrase
-            export DISPLAY=:0.0
-            echo "${{ secrets.EC2_SSH_PASSPHRASE }}" | SSH_ASKPASS=/bin/echo setsid ssh-add /tmp/ec2_key.pem
-            
-            # Wait for SSH to be available
-            echo "Waiting for SSH to be available..."
-            for i in {1..60}; do
-              if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 ec2-user@$INSTANCE_IP "echo 'SSH ready'" 2>/dev/null; then
-                echo "SSH is ready"
-                break
-              fi
-              echo "SSH not ready, waiting... (attempt $i/60)"
-              sleep 15
-            done
-            
-            # Copy application files to EC2
-            scp -o StrictHostKeyChecking=no -r axialy-admin-product/ ec2-user@$INSTANCE_IP:~/
-            
-            # Execute deployment on EC2
-            ssh -o StrictHostKeyChecking=no ec2-user@$INSTANCE_IP << 'REMOTE_COMMANDS'
-            
-            # Update system and install packages - FINAL FIX for Amazon Linux 2023
-            sudo dnf update -y
-            sudo dnf install -y \
-              httpd \
-              php \
-              php-cli \
-              php-fpm \
-              php-mysqlnd \
-              php-zip \
-              php-xml \
-              php-mbstring \
-              php-curl \
-              php-gd \
-              php-opcache \
-              mariadb105 \
-              unzip \
-              wget \
-              curl
-            
-            # Enable mod_headers module for Apache
-            echo "LoadModule headers_module modules/mod_headers.so" | sudo tee -a /etc/httpd/conf/httpd.conf
-            
-            # Configure PHP for production
-            sudo tee /etc/php.ini > /dev/null << 'PHP_CONFIG'
-            [PHP]
-            memory_limit = 256M
-            upload_max_filesize = 50M
-            post_max_size = 50M
-            max_execution_time = 300
-            max_input_time = 300
-            session.gc_maxlifetime = 14400
-            session.cookie_secure = 1
-            session.cookie_httponly = 1
-            session.use_only_cookies = 1
-            expose_php = Off
-            display_errors = Off
-            log_errors = On
-            error_log = /var/log/php-errors.log
-            date.timezone = UTC
-            PHP_CONFIG
-            
-            # Start and enable services
-            sudo systemctl start httpd
-            sudo systemctl enable httpd
-            sudo systemctl start php-fpm
-            sudo systemctl enable php-fpm
-            
-            # Configure Apache virtual host
-            sudo tee /etc/httpd/conf.d/axialy-admin.conf > /dev/null << 'APACHE_CONFIG'
-            <VirtualHost *:80>
-                DocumentRoot /var/www/html/axialy-admin
-                ServerName admin.axialy.com
-                DirectoryIndex index.php admin_login.php
+            <Directory /var/www/html/axialy-admin>
+                Options -Indexes +FollowSymLinks
+                AllowOverride All
+                Require all granted
                 
-                <Directory /var/www/html/axialy-admin>
-                    Options -Indexes +FollowSymLinks
-                    AllowOverride All
-                    Require all granted
-                    
-                    # Security headers
-                    Header always set X-Content-Type-Options nosniff
-                    Header always set X-Frame-Options DENY
-                    Header always set X-XSS-Protection "1; mode=block"
-                    Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
-                    Header always set Referrer-Policy "strict-origin-when-cross-origin"
-                </Directory>
-                
-                # Hide sensitive files
-                <FilesMatch "\.(env|log|ini)$">
-                    Require all denied
-                </FilesMatch>
-                
-                # PHP handling
-                <FilesMatch \.php$>
-                    SetHandler "proxy:unix:/run/php-fpm/www.sock|fcgi://localhost"
-                </FilesMatch>
-                
-                # Logging
-                ErrorLog /var/log/httpd/axialy-admin-error.log
-                CustomLog /var/log/httpd/axialy-admin-access.log combined
-            </VirtualHost>
-            APACHE_CONFIG
-            
-            # Deploy application files
-            sudo mkdir -p /var/www/html/axialy-admin
-            sudo cp -r ~/axialy-admin-product/* /var/www/html/axialy-admin/
-            
-            # Create .htaccess for additional security
-            sudo tee /var/www/html/axialy-admin/.htaccess > /dev/null << 'HTACCESS'
-            # Security headers
-            <IfModule mod_headers.c>
+                # Security headers
                 Header always set X-Content-Type-Options nosniff
                 Header always set X-Frame-Options DENY
                 Header always set X-XSS-Protection "1; mode=block"
-            </IfModule>
+                Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+                Header always set Referrer-Policy "strict-origin-when-cross-origin"
+            </Directory>
             
-            # Prevent access to sensitive files
-            <FilesMatch "\.(env|log|ini|conf)$">
-                Order allow,deny
-                Deny from all
+            # Hide sensitive files
+            <FilesMatch "\.(env|log|ini)$">
+                Require all denied
             </FilesMatch>
             
-            # Directory protection
-            <FilesMatch "^\.">
-                Order allow,deny
-                Deny from all
+            # PHP handling
+            <FilesMatch \.php$>
+                SetHandler "proxy:unix:/run/php-fpm/www.sock|fcgi://localhost"
             </FilesMatch>
             
-            # PHP error handling
-            php_flag display_errors Off
-            php_flag log_errors On
-            php_value error_log /var/log/httpd/php-errors.log
-            HTACCESS
-            
-            # Set proper permissions
-            sudo chown -R apache:apache /var/www/html/axialy-admin
-            sudo chmod -R 755 /var/www/html/axialy-admin
-            sudo chmod 600 /var/www/html/axialy-admin/.env
-            
-            # Create log directories
-            sudo mkdir -p /var/log/axialy-admin
-            sudo chown apache:apache /var/log/axialy-admin
-            
-            # Test database connection
-            echo "Testing database connection..."
-            php -r "
-            require_once '/var/www/html/axialy-admin/includes/AdminDBConfig.php';
-            use Axialy\AdminConfig\AdminDBConfig;
-            try {
-                \$pdo = AdminDBConfig::getInstance()->getPdo();
-                echo 'Database connection successful!' . PHP_EOL;
-            } catch (Exception \$e) {
-                echo 'Database connection failed: ' . \$e->getMessage() . PHP_EOL;
-                exit(1);
-            }
-            "
-            
-            # Restart services
-            sudo systemctl restart httpd
-            sudo systemctl restart php-fpm
-            
-            # Verify services are running
-            sudo systemctl status httpd --no-pager
-            sudo systemctl status php-fpm --no-pager
-            
-            echo "✓ Application deployment completed successfully!"
-            
-            REMOTE_COMMANDS
-            
-            # Clean up ssh-agent and temporary files
-            if [ -n "$SSH_AGENT_PID" ]; then
-              ssh-agent -k
-            fi
-            rm -f /tmp/ec2_key.pem
+            # Logging
+            ErrorLog /var/log/httpd/axialy-admin-error.log
+            CustomLog /var/log/httpd/axialy-admin-access.log combined
+        </VirtualHost>
+        APACHE_CONFIG
+        
+        # Deploy application files
+        sudo mkdir -p /var/www/html/axialy-admin
+        sudo cp -r ~/axialy-admin-product/* /var/www/html/axialy-admin/
+        
+        # Create .htaccess for additional security
+        sudo tee /var/www/html/axialy-admin/.htaccess > /dev/null << 'HTACCESS'
+        # Security headers
+        <IfModule mod_headers.c>
+            Header always set X-Content-Type-Options nosniff
+            Header always set X-Frame-Options DENY
+            Header always set X-XSS-Protection "1; mode=block"
+        </IfModule>
+        
+        # Prevent access to sensitive files
+        <FilesMatch "\.(env|log|ini|conf)$">
+            Order allow,deny
+            Deny from all
+        </FilesMatch>
+        
+        # Directory protection
+        <FilesMatch "^\.">
+            Order allow,deny
+            Deny from all
+        </FilesMatch>
+        
+        # PHP error handling
+        php_flag display_errors Off
+        php_flag log_errors On
+        php_value error_log /var/log/httpd/php-errors.log
+        HTACCESS
+        
+        # Set proper permissions
+        sudo chown -R apache:apache /var/www/html/axialy-admin
+        sudo chmod -R 755 /var/www/html/axialy-admin
+        sudo chmod 600 /var/www/html/axialy-admin/.env
+        
+        # Create log directories
+        sudo mkdir -p /var/log/axialy-admin
+        sudo chown apache:apache /var/log/axialy-admin
+        
+        # Test database connection
+        echo "Testing database connection..."
+        php -r "
+        require_once '/var/www/html/axialy-admin/includes/AdminDBConfig.php';
+        use Axialy\AdminConfig\AdminDBConfig;
+        try {
+            \$pdo = AdminDBConfig::getInstance()->getPdo();
+            echo 'Database connection successful!' . PHP_EOL;
+        } catch (Exception \$e) {
+            echo 'Database connection failed: ' . \$e->getMessage() . PHP_EOL;
+            exit(1);
+        }
+        "
+        
+        # Restart services
+        sudo systemctl restart httpd
+        sudo systemctl restart php-fpm
+        
+        # Verify services are running
+        sudo systemctl status httpd --no-pager
+        sudo systemctl status php-fpm --no-pager
+        
+        echo "✓ Application deployment completed successfully!"
+        
+        REMOTE_COMMANDS
+        
+        # Clean up ssh-agent and temporary files
+        if [ -n "$SSH_AGENT_PID" ]; then
+          ssh-agent -k
+        fi
+        rm -f /tmp/ec2_key.pem
 
     - name: Test application deployment
       env:
