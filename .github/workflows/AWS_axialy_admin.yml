@@ -304,17 +304,26 @@ jobs:
         sudo apt-get update -qq
         sudo apt-get install -y expect
         
-        # Create improved expect script for SSH commands
+        # Create improved expect script for SSH commands with shorter timeout
         cat > ~/.ssh/ssh_expect.exp << 'EOF'
         #!/usr/bin/expect -f
-        set timeout 60
+        set timeout 120
         set host [lindex $argv 0]
         set command [lindex $argv 1]
         set passphrase $env(EC2_SSH_PASSPHRASE)
         
         log_user 1
         
-        spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -i ~/.ssh/ec2_key.pem ec2-user@$host $command
+        # Use a more direct SSH approach
+        spawn ssh -o StrictHostKeyChecking=no \
+                  -o UserKnownHostsFile=/dev/null \
+                  -o ConnectTimeout=30 \
+                  -o ServerAliveInterval=10 \
+                  -o ServerAliveCountMax=3 \
+                  -o BatchMode=no \
+                  -i ~/.ssh/ec2_key.pem \
+                  ec2-user@$host \
+                  $command
         
         expect {
             "Enter passphrase for key" {
@@ -325,34 +334,53 @@ jobs:
                 send "yes\r"
                 exp_continue
             }
-            "$ " {
-                # Command completed successfully
-            }
-            timeout {
-                puts stderr "SSH connection timeout after 60 seconds"
+            "Permission denied" {
+                puts stderr "SSH authentication failed"
                 exit 1
             }
+            "Connection refused" {
+                puts stderr "SSH connection refused"
+                exit 2
+            }
+            "No route to host" {
+                puts stderr "No route to host"
+                exit 3
+            }
+            -re ".*\\$ " {
+                # Command prompt appeared - command completed
+            }
+            timeout {
+                puts stderr "SSH timeout after 120 seconds"
+                exit 4
+            }
             eof {
-                # Command completed
+                # Connection closed - command completed
             }
         }
         
+        # Wait for the command to complete and capture exit code
         catch wait result
-        exit [lindex $result 3]
+        set exit_code [lindex $result 3]
+        exit $exit_code
         EOF
         chmod +x ~/.ssh/ssh_expect.exp
         
-        # Create improved expect script for SCP
+        # Create improved expect script for SCP with longer timeout
         cat > ~/.ssh/scp_expect.exp << 'EOF'
         #!/usr/bin/expect -f
-        set timeout 120
+        set timeout 300
         set source [lindex $argv 0]
         set dest [lindex $argv 1]
         set passphrase $env(EC2_SSH_PASSPHRASE)
         
         log_user 1
         
-        spawn scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r -i ~/.ssh/ec2_key.pem $source $dest
+        spawn scp -o StrictHostKeyChecking=no \
+                  -o UserKnownHostsFile=/dev/null \
+                  -o ConnectTimeout=30 \
+                  -r \
+                  -i ~/.ssh/ec2_key.pem \
+                  $source $dest
         
         expect {
             "Enter passphrase for key" {
@@ -363,12 +391,20 @@ jobs:
                 send "yes\r"
                 exp_continue
             }
+            "Permission denied" {
+                puts stderr "SCP authentication failed"
+                exit 1
+            }
+            "Connection refused" {
+                puts stderr "SCP connection refused"
+                exit 2
+            }
             "100%" {
                 exp_continue
             }
             timeout {
-                puts stderr "SCP timeout after 120 seconds"
-                exit 1
+                puts stderr "SCP timeout after 300 seconds"
+                exit 4
             }
             eof {
                 # Transfer completed
@@ -376,7 +412,8 @@ jobs:
         }
         
         catch wait result
-        exit [lindex $result 3]
+        set exit_code [lindex $result 3]
+        exit $exit_code
         EOF
         chmod +x ~/.ssh/scp_expect.exp
         
@@ -408,20 +445,18 @@ jobs:
           sleep 30
         done
 
-    - name: Deploy application to EC2
+    - name: Prepare application files
       env:
         INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
         EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
       run: |
-        echo "Deploying Axialy Admin application to EC2 instance..."
+        echo "Preparing application files for deployment..."
         
-        # Prepare application files for deployment
-        if [ ! -d "axialy-admin-product" ]; then
-          echo "Creating application directory structure..."
-          mkdir -p axialy-admin-product/includes
-          
-          # Create the .env file
-          cat > axialy-admin-product/.env << EOF
+        # Create application directory structure
+        mkdir -p axialy-admin-product/includes
+        
+        # Create the .env file
+        cat > axialy-admin-product/.env << EOF
         DB_HOST=${{ secrets.DB_HOST }}
         DB_PORT=${{ secrets.DB_PORT }}
         DB_USER=${{ secrets.DB_USER }}
@@ -441,9 +476,9 @@ jobs:
         SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}
         SMTP_SECURE=${{ secrets.SMTP_SECURE }}
         EOF
-          
-          # Create AdminDBConfig.php
-          cat > axialy-admin-product/includes/AdminDBConfig.php << 'PHP_EOF'
+        
+        # Create AdminDBConfig.php (simplified for deployment)
+        cat > axialy-admin-product/includes/AdminDBConfig.php << 'PHP_EOF'
         <?php
         namespace Axialy\AdminConfig;
         use PDO, RuntimeException;
@@ -486,106 +521,42 @@ jobs:
             }
         }
         PHP_EOF
-          
-          # Create basic login page
-          cat > axialy-admin-product/admin_login.php << 'LOGIN_EOF'
-        <?php
-        session_start();
-        require_once __DIR__ . '/includes/AdminDBConfig.php';
-        use Axialy\AdminConfig\AdminDBConfig;
-        $error = '';
-        if ($_POST) {
-            $username = trim($_POST['username'] ?? '');
-            $password = trim($_POST['password'] ?? '');
-            if ($username && $password) {
-                try {
-                    $db = AdminDBConfig::getInstance()->getPdo();
-                    $stmt = $db->prepare("SELECT * FROM admin_users WHERE username = ? AND is_active = 1");
-                    $stmt->execute([$username]);
-                    $user = $stmt->fetch();
-                    if ($user && password_verify($password, $user['password'])) {
-                        $token = bin2hex(random_bytes(32));
-                        $db->prepare("INSERT INTO admin_user_sessions (admin_user_id, session_token, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 4 HOUR))")->execute([$user['id'], $token]);
-                        $_SESSION['admin_user_id'] = $user['id'];
-                        $_SESSION['admin_session_token'] = $token;
-                        header('Location: index.php');
-                        exit;
-                    }
-                } catch (Exception $e) { error_log($e->getMessage()); }
-                $error = 'Invalid credentials';
-            } else $error = 'Please enter username and password';
-        }
-        ?><!DOCTYPE html><html><head><title>Axialy Admin Login</title><style>body{font-family:sans-serif;max-width:400px;margin:50px auto;padding:20px}.error{color:red;margin-bottom:1em}input{width:100%;padding:8px;margin:5px 0;box-sizing:border-box}button{width:100%;padding:10px;background:#007BFF;color:white;border:none;cursor:pointer}</style></head><body><h2>Axialy Admin Login</h2><?php if($error): ?><div class="error"><?= htmlspecialchars($error) ?></div><?php endif; ?><form method="post"><input type="text" name="username" placeholder="Username" required autofocus><input type="password" name="password" placeholder="Password" required><button type="submit">Login</button></form></body></html>
-        LOGIN_EOF
-          
-          # Create basic index page
-          cat > axialy-admin-product/index.php << 'INDEX_EOF'
-        <?php
-        session_start();
-        require_once __DIR__ . '/includes/AdminDBConfig.php';
-        use Axialy\AdminConfig\AdminDBConfig;
-
-        // Check if initial user exists
-        $db = AdminDBConfig::getInstance()->getPdo();
-        $stmt = $db->prepare("SELECT COUNT(*) FROM admin_users WHERE username = 'caseylide'");
-        $stmt->execute();
-        if (!$stmt->fetchColumn()) {
-            if ($_POST && ($_POST['init_code'] ?? '') === 'Casellio') {
-                $hash = password_hash('Casellio', PASSWORD_DEFAULT);
-                $db->prepare("INSERT INTO admin_users (username, password, email) VALUES ('caseylide', ?, 'caseylide@gmail.com')")->execute([$hash]);
-                header('Location: admin_login.php');
-                exit;
-            }
-            echo '<!DOCTYPE html><html><head><title>Setup</title></head><body><h2>Initial Setup</h2><p>Enter the admin code to initialize the system.</p><form method="post"><input type="password" name="init_code" placeholder="Admin code" required><button type="submit">Initialize</button></form></body></html>';
-            exit;
-        }
-
-        // Check authentication
-        if (empty($_SESSION['admin_user_id']) || empty($_SESSION['admin_session_token'])) {
-            header('Location: admin_login.php');
-            exit;
-        }
-        ?><!DOCTYPE html><html><head><title>Axialy Admin</title><style>body{font-family:sans-serif;max-width:800px;margin:30px auto;padding:20px}</style></head><body><h1>Axialy Admin Dashboard</h1><p>Welcome to the administration panel.</p><p><a href="admin_login.php">Logout</a></p></body></html>
-        INDEX_EOF
-          
-          echo "Application files created successfully"
-        fi
         
-        # Copy application files to EC2
+        echo "✓ Application files prepared"
+
+    - name: Copy application files to EC2
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
         echo "Copying application files to EC2..."
         ~/.ssh/scp_expect.exp axialy-admin-product/ "ec2-user@${{ steps.deploy_ec2.outputs.instance_ip }}:~/"
+        echo "✓ File transfer completed"
+
+    - name: Install system packages on EC2
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
+        echo "Installing system packages..."
         
-        # Execute deployment commands on EC2
-        echo "Executing deployment on EC2..."
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" 'bash -s' << 'REMOTE_COMMANDS'
+        # Update system
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo dnf update -y"
         
-        # Update system and install packages
-        sudo dnf update -y
-        sudo dnf install -y \
-          httpd \
-          php \
-          php-cli \
-          php-fpm \
-          php-mysqlnd \
-          php-zip \
-          php-xml \
-          php-mbstring \
-          php-curl \
-          php-gd \
-          php-opcache \
-          mariadb105 \
-          unzip \
-          wget \
-          curl
+        # Install web server packages
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo dnf install -y httpd php php-cli php-fpm php-mysqlnd php-zip php-xml php-mbstring php-curl php-gd php-opcache mariadb105 unzip wget curl"
         
-        # Start and enable services
-        sudo systemctl start httpd
-        sudo systemctl enable httpd
-        sudo systemctl start php-fpm
-        sudo systemctl enable php-fpm
+        echo "✓ System packages installed"
+
+    - name: Configure web server on EC2
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
+        echo "Configuring web server..."
         
-        # Configure Apache
-        sudo tee /etc/httpd/conf.d/axialy-admin.conf > /dev/null << 'APACHE_CONFIG'
+        # Create Apache configuration file on the remote server
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "cat > /tmp/axialy-admin.conf << 'APACHE_EOF'
         <VirtualHost *:80>
             DocumentRoot /var/www/html/axialy-admin
             ServerName admin.axialy.com
@@ -599,67 +570,108 @@ jobs:
                 # Security headers
                 Header always set X-Content-Type-Options nosniff
                 Header always set X-Frame-Options DENY
-                Header always set X-XSS-Protection "1; mode=block"
-                Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
-                Header always set Referrer-Policy "strict-origin-when-cross-origin"
+                Header always set X-XSS-Protection \"1; mode=block\"
+                Header always set Strict-Transport-Security \"max-age=31536000; includeSubDomains\"
+                Header always set Referrer-Policy \"strict-origin-when-cross-origin\"
             </Directory>
             
             # Hide sensitive files
-            <FilesMatch "\.(env|log|ini)$">
+            <FilesMatch \"\.(env|log|ini)$\">
                 Require all denied
             </FilesMatch>
             
             # PHP handling
             <FilesMatch \.php$>
-                SetHandler "proxy:unix:/run/php-fpm/www.sock|fcgi://localhost"
+                SetHandler \"proxy:unix:/run/php-fpm/www.sock|fcgi://localhost\"
             </FilesMatch>
             
             # Logging
             ErrorLog /var/log/httpd/axialy-admin-error.log
             CustomLog /var/log/httpd/axialy-admin-access.log combined
         </VirtualHost>
-        APACHE_CONFIG
+        APACHE_EOF"
         
-        # Deploy application files
-        sudo mkdir -p /var/www/html/axialy-admin
-        sudo cp -r ~/axialy-admin-product/* /var/www/html/axialy-admin/
+        # Move configuration to proper location
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo mv /tmp/axialy-admin.conf /etc/httpd/conf.d/"
         
-        # Set proper permissions
-        sudo chown -R apache:apache /var/www/html/axialy-admin
-        sudo chmod -R 755 /var/www/html/axialy-admin
-        sudo chmod 600 /var/www/html/axialy-admin/.env
+        echo "✓ Web server configured"
+
+    - name: Deploy application files on EC2
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
+        echo "Deploying application files..."
+        
+        # Create web directory and deploy files
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo mkdir -p /var/www/html/axialy-admin"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo cp -r ~/axialy-admin-product/* /var/www/html/axialy-admin/"
+        
+        # Set permissions
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chown -R apache:apache /var/www/html/axialy-admin"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chmod -R 755 /var/www/html/axialy-admin"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chmod 600 /var/www/html/axialy-admin/.env"
         
         # Create log directories
-        sudo mkdir -p /var/log/axialy-admin
-        sudo chown apache:apache /var/log/axialy-admin
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo mkdir -p /var/log/axialy-admin"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chown apache:apache /var/log/axialy-admin"
+        
+        echo "✓ Application files deployed"
+
+    - name: Start services and test on EC2
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
+        echo "Starting services..."
+        
+        # Start and enable services
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl start httpd"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl enable httpd"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl start php-fpm"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl enable php-fpm"
+        
+        # Restart services to ensure configuration is loaded
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl restart httpd"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl restart php-fpm"
+        
+        echo "✓ Services started successfully"
+
+    - name: Test database connection on EC2
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
+        echo "Testing database connection..."
         
         # Test database connection
-        echo "Testing database connection..."
-        php -r "
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "php -r \"
         require_once '/var/www/html/axialy-admin/includes/AdminDBConfig.php';
         use Axialy\AdminConfig\AdminDBConfig;
         try {
-            \$pdo = AdminDBConfig::getInstance()->getPdo();
+            \\\$pdo = AdminDBConfig::getInstance()->getPdo();
             echo 'Database connection successful!' . PHP_EOL;
-        } catch (Exception \$e) {
-            echo 'Database connection failed: ' . \$e->getMessage() . PHP_EOL;
+        } catch (Exception \\\$e) {
+            echo 'Database connection failed: ' . \\\$e->getMessage() . PHP_EOL;
             exit(1);
         }
-        "
+        \""
         
-        # Restart services
-        sudo systemctl restart httpd
-        sudo systemctl restart php-fpm
+        echo "✓ Database connection test completed"
+
+    - name: Verify service status on EC2
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
+        echo "Verifying service status..."
         
-        # Verify services are running
-        sudo systemctl status httpd --no-pager
-        sudo systemctl status php-fpm --no-pager
+        # Check service status
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl status httpd --no-pager"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl status php-fpm --no-pager"
         
-        echo "✓ Application deployment completed successfully!"
-        
-        REMOTE_COMMANDS
-        
-        echo "✓ Deployment completed"
+        echo "✓ Service verification completed"
+        echo "✓ Deployment completed successfully!"
 
     - name: Test application deployment
       env:
