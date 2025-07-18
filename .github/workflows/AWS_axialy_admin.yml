@@ -1,4 +1,4 @@
-name: Step 3. AWS Axialy Admin Deployment
+name: Step 2. AWS Axialy Admin Deployment
 
 on:
   workflow_dispatch:
