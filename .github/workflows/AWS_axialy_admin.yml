@@ -285,33 +285,38 @@ jobs:
         aws ec2 wait instance-running --instance-ids ${{ steps.deploy_ec2.outputs.instance_id }}
         echo "EC2 instance is running"
 
-    - name: Deploy application to EC2
-      env:
-        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
-      run: |
-        echo "Deploying Axialy Admin application to EC2 instance..."
-        
-        # Wait for SSH to be available
-        echo "Waiting for SSH to be available..."
-        for i in {1..10}; do
-          if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i <(echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}") ec2-user@$INSTANCE_IP "echo 'SSH ready'" 2>/dev/null; then
-            echo "SSH is ready"
-            break
-          fi
-          echo "SSH not ready, waiting... (attempt $i/30)"
-          sleep 10
-        done
-        
-        # Create temporary key file
-        echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > /tmp/ec2_key.pem
-        chmod 600 /tmp/ec2_key.pem
-        
-        # Copy application files to EC2
-        scp -o StrictHostKeyChecking=no -i /tmp/ec2_key.pem -r axialy-admin-product/ ec2-user@$INSTANCE_IP:~/
-        
-        # Execute deployment on EC2
-        ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key.pem ec2-user@$INSTANCE_IP << 'REMOTE_COMMANDS'
-        
+        - name: Deploy application to EC2
+          env:
+            INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+          run: |
+            echo "Deploying Axialy Admin application to EC2 instance..."
+            
+            # Setup SSH agent and add passphrase-protected key
+            eval $(ssh-agent -s)
+            echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > /tmp/ec2_key.pem
+            chmod 600 /tmp/ec2_key.pem
+            
+            # Add key to ssh-agent with passphrase
+            export DISPLAY=:0.0
+            echo "${{ secrets.EC2_SSH_PASSPHRASE }}" | SSH_ASKPASS=/bin/echo setsid ssh-add /tmp/ec2_key.pem
+            
+            # Wait for SSH to be available
+            echo "Waiting for SSH to be available..."
+            for i in {1..60}; do
+              if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 ec2-user@$INSTANCE_IP "echo 'SSH ready'" 2>/dev/null; then
+                echo "SSH is ready"
+                break
+              fi
+              echo "SSH not ready, waiting... (attempt $i/60)"
+              sleep 15
+            done
+            
+            # Copy application files to EC2
+            scp -o StrictHostKeyChecking=no -r axialy-admin-product/ ec2-user@$INSTANCE_IP:~/
+            
+            # Execute deployment on EC2
+            ssh -o StrictHostKeyChecking=no ec2-user@$INSTANCE_IP << 'REMOTE_COMMANDS'
+                
         # Update system and install packages - FINAL FIX for Amazon Linux 2023
         sudo dnf update -y
         # In the SSH deployment section, use these packages:
