@@ -464,10 +464,11 @@ jobs:
         sudo systemctl status php-fpm --no-pager
         
         echo "✓ Application deployment completed successfully!"
-        
+
         REMOTE_COMMANDS
         
-        # Clean up the temporary key file
+        # Clean up ssh-agent and temporary files
+        ssh-agent -k
         rm -f /tmp/ec2_key.pem
 
     - name: Test application deployment
