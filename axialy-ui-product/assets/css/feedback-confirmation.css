@@ -1,0 +1,126 @@
+/* feedback-confirmation.css */
+
+.container {
+    max-width: 800px;
+    margin: 30px auto;
+    font-family: Arial, sans-serif;
+    text-align: center;
+}
+
+.message {
+    color: green;
+    font-weight: bold;
+}
+
+.error {
+    color: red;
+    font-weight: bold;
+}
+
+/* Overlay styling */
+.overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.7); /* Darker background for better contrast */
+    display: none;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.overlay-content {
+    background: #fff;
+    padding: 30px; /* Increased padding for better spacing */
+    border-radius: 8px; /* Slightly rounded corners */
+    width: 600px; /* Increased width */
+    max-width: 90%;
+    position: relative;
+    text-align: center; /* Centered text */
+}
+
+.overlay-content h2 {
+    margin-top: 0;
+}
+
+.overlay-content p {
+    font-size: 16px;
+    color: #555;
+}
+
+.overlay-content textarea {
+    width: 100%;
+    height: 120px; /* Slightly taller textarea */
+    padding: 10px;
+    font-size: 16px;
+    margin-bottom: 15px;
+}
+
+.close-overlay {
+    position: absolute;
+    top: 15px; /* Adjusted position */
+    right: 20px; /* Adjusted position */
+    font-size: 24px; /* Larger close icon */
+    cursor: pointer;
+}
+
+/* Pending Requests Overlay Content */
+#pending-requests-overlay .overlay-content {
+    max-height: 80vh; /* Set max height to 80% of viewport height */
+    overflow-y: auto; /* Enable vertical scrolling */
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 15px;
+}
+
+table, th, td {
+    border: 1px solid #ddd;
+}
+
+th {
+    background-color: #f9f9f9;
+    font-weight: bold;
+}
+
+td, th {
+    padding: 10px;
+    text-align: center;
+}
+
+tr:nth-child(even) {
+    background-color: #f2f2f2;
+}
+
+a {
+    color: #007BFF;
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+/* Button Styles */
+.button {
+    padding: 10px 20px;
+    font-size: 16px;
+    cursor: pointer;
+    margin: 10px 5px;
+    border: none;
+    background-color: #007BFF;
+    color: #fff;
+    border-radius: 4px;
+}
+
+.button:hover {
+    background-color: #0056b3;
+}
+
+.container button {
+    margin: 10px 5px;
+}

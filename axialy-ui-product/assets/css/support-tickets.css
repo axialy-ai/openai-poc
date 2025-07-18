@@ -1,0 +1,209 @@
+/* ------------------------------------------
+   support-tickets.css
+   Aligns the Support Tickets overlay
+   with AxiaBA’s existing styles & branding.
+------------------------------------------- */
+
+/* Optional: unify fonts with the main app if needed */
+html, body, .overlay, .overlay-content {
+  font-family: "Segoe UI", Tahoma, sans-serif; 
+  /* Or whichever font your app uses. */
+}
+
+/* 
+--------------------------------------------
+1) Base overlay container 
+(rely on .overlay/.overlay-content from overlay.css
+for general positioning, 
+but you can refine it for an AxiaBA look)
+--------------------------------------------
+*/
+/* If needed, override .overlay or .overlay-content widths/padding
+   to match the style from your Generate tab. For example:
+*/
+.overlay-content {
+  background-color: #fff;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+  /* The lines below add consistent spacing, 
+     similar to your “ribbons” or card-like containers. */
+  padding: 20px 24px;
+  max-width: 720px;
+}
+
+/* Suppose this goes in support-tickets.css or overlay.css */
+
+/* The container for just the close button at top */
+.overlay-close-row {
+  text-align: right;
+  margin-bottom: 16px; /* So there's space below the close row before the header */
+  /* You could also add a subtle border or line if desired */
+}
+
+/* The close button itself—already defined, but ensure it doesn’t overlap */
+.close-overlay {
+  font-size: 26px; 
+  color: #333;
+  cursor: pointer;
+  line-height: 1; 
+  /* Enough to have it nicely centered in the row if it's short. */
+}
+.close-overlay:hover {
+  color: #000;
+}
+
+
+
+/* 
+--------------------------------------------
+2) A top “header” bar with the overlay title
+   and any controls (checkboxes/buttons)
+--------------------------------------------
+*/
+.support-tickets-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  /* Use a subtle bottom border or line to separate from content */
+  border-bottom: 2px solid #ddd;
+  margin-bottom: 18px;
+  padding-bottom: 10px;
+}
+.support-tickets-header h2 {
+  color: #333;
+  font-size: 1.25rem;
+  margin: 0;
+  font-weight: 600; /* slight bold for headings */
+}
+/* Right-hand “controls” container: e.g. checkbox + button */
+.support-tickets-controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;  /* spacing between each control */
+}
+
+/* 
+--------------------------------------------
+3) “Show Closed Tickets” label + checkbox
+--------------------------------------------
+*/
+.support-tickets-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  /* text color consistent with the app’s #333 or #555 */
+  color: #333;
+}
+.support-tickets-checkbox input[type="checkbox"] {
+  transform: scale(1.1);
+  cursor: pointer;
+}
+
+/* 
+--------------------------------------------
+4) Buttons: consistent with your app’s “Send Selected” or “Save Data” 
+   using AxiaBA’s brand color #007bff (primary),
+   #28a745 (success), #6c757d (secondary), etc.
+--------------------------------------------
+*/
+.support-tickets-button {
+  display: inline-block;
+  padding: 8px 16px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: #fff;
+  background-color: #007bff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  text-align: center;
+  white-space: nowrap;
+}
+.support-tickets-button:hover {
+  background-color: #0056b3;
+}
+/* Variation for “Back” or “Cancel” style */
+.support-tickets-button.secondary {
+  background-color: #6c757d;
+}
+.support-tickets-button.secondary:hover {
+  background-color: #545b62;
+}
+/* Variation for “Submit” or “Create” style */
+.support-tickets-button.success {
+  background-color: #28a745;
+}
+.support-tickets-button.success:hover {
+  background-color: #218838;
+}
+
+/* 
+--------------------------------------------
+5) Table styling: 
+   similar to “Generate” tab’s data tables or card outlines
+--------------------------------------------
+*/
+.support-tickets-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 16px; /* space below table */
+  font-size: 0.9rem;
+}
+.support-tickets-table th,
+.support-tickets-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #eee;
+  color: #333;
+  vertical-align: middle;
+}
+.support-tickets-table th {
+  background-color: #f8f9fa;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+.support-tickets-table tbody tr:hover {
+  background-color: #fdfdfd;
+}
+
+/* 
+--------------------------------------------
+6) Container for ticket details or new ticket form
+--------------------------------------------
+*/
+.support-tickets-body {
+  margin-top: 20px; 
+  /* optional: to match your “ribbon” spacing */
+}
+
+.support-tickets-body p {
+  margin-bottom: 10px;
+  line-height: 1.4;
+  color: #444;
+}
+
+.support-tickets-body label {
+  font-weight: 600;
+  color: #333;
+  display: block;
+  margin-bottom: 6px;
+}
+
+/* 
+--------------------------------------------
+7) Minimal media query for responsiveness
+--------------------------------------------
+*/
+@media (max-width: 600px) {
+  .overlay-content {
+    max-width: 95%;
+    padding: 16px;
+  }
+  .support-tickets-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+}

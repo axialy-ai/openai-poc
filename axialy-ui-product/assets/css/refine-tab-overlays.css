@@ -1,0 +1,171 @@
+/*
+  refine-tab-overlays.css
+
+  Provides styling for the "Edit Record" and "New Record" overlays on the Refine tab,
+  including title, subtitle, fields, action buttons, and the multiline AI instructions box.
+*/
+
+.overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.7);
+  z-index: 3000; /* Sits above typical modals used in other modules */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+}
+
+.overlay-content {
+  background-color: #fff;
+  width: 600px;
+  max-width: 90%;
+  border-radius: 8px;
+  padding: 20px;
+  position: relative;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.close-overlay {
+  position: absolute;
+  top: 10px;
+  right: 15px;
+  font-size: 22px;
+  cursor: pointer;
+  color: #444;
+}
+
+.close-overlay:hover {
+  color: #000;
+}
+
+.record-overlay-header h2 {
+  margin-top: 0;
+  font-size: 20px;
+  color: #333;
+  text-align: center;
+}
+
+.record-overlay-header p.overlay-subtitle {
+  margin-top: 5px;
+  margin-bottom: 15px;
+  font-size: 14px;
+  color: #555;
+  text-align: center;
+}
+
+.record-overlay-body {
+  margin-top: 10px;
+  margin-bottom: 20px;
+}
+
+.overlay-form-group {
+  margin-bottom: 15px;
+}
+
+.overlay-form-group label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 5px;
+  color: #333;
+}
+
+.overlay-form-group input[type="text"],
+.overlay-form-group textarea {
+  width: 100%;
+  padding: 8px;
+  font-size: 14px;
+  box-sizing: border-box;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+.overlay-form-group textarea {
+  resize: vertical;
+  min-height: 60px;
+}
+
+.record-overlay-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+  justify-content: flex-end;
+}
+
+.record-overlay-actions button {
+  padding: 8px 14px;
+  font-size: 14px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.save-record-btn {
+  background-color: #007bff;
+  color: #fff;
+}
+
+.save-record-btn:hover {
+  background-color: #0056b3;
+}
+
+.delete-record-btn {
+  background-color: #dc3545;
+  color: #fff;
+}
+
+.delete-record-btn:hover {
+  background-color: #c82333;
+}
+
+.restore-record-btn {
+  background-color: #28a745;
+  color: #fff;
+}
+
+.restore-record-btn:hover {
+  background-color: #218838;
+}
+
+.ai-enhance-btn {
+  background-color: #ffc107;
+  color: #333;
+}
+
+.ai-enhance-btn:hover {
+  background-color: #e0a800;
+}
+
+/* A helper style for an alert that the feature is still in progress. */
+.ai-enhance-btn-disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.cancel-record-btn {
+  background-color: #6c757d;
+  color: #fff;
+}
+
+.cancel-record-btn:hover {
+  background-color: #5a6268;
+}
+
+/* If needed, we can style the entire keys-values container. */
+.record-properties-container {
+  border: 1px solid #ddd;
+  padding: 10px;
+  border-radius: 4px;
+  background-color: #f9f9f9;
+}
+
+/* Additional note regarding strikethrough styling (if used in an overlay) */
+.strikethrough {
+  text-decoration: line-through;
+  color: #aa0000;
+}
