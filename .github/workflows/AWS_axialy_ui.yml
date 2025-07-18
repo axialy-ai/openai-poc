@@ -1,4 +1,3 @@
-
 name: Install 3. AWS Axialy UI Deployment
 
 on:
@@ -435,12 +434,18 @@ jobs:
         mkdir -p axialy-ui-product
         
         # Copy all UI source files to the deployment directory
-        # Note: This assumes the UI source is in a 'ui' or 'axialy-ui' directory in the repo
+        # Note: This checks multiple possible locations for UI source
         if [ -d "ui" ]; then
+          echo "Found UI source in 'ui/' directory"
           cp -r ui/* axialy-ui-product/
         elif [ -d "axialy-ui" ]; then
+          echo "Found UI source in 'axialy-ui/' directory"
           cp -r axialy-ui/* axialy-ui-product/
+        elif [ -d "axialy-ui-product" ]; then
+          echo "Found UI source in 'axialy-ui-product/' directory"
+          cp -r axialy-ui-product/* axialy-ui-product/
         elif [ -d "src/ui" ]; then
+          echo "Found UI source in 'src/ui/' directory"
           cp -r src/ui/* axialy-ui-product/
         else
           echo "Warning: UI source directory not found. Creating minimal structure..."
