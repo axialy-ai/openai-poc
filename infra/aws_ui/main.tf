@@ -116,7 +116,7 @@ locals {
   ]))
 }
 
-# EC2 instance for Axialy UI
+# EC2 instance for Axialy UI - using regular public IP, not Elastic IP
 resource "aws_instance" "axialy_ui" {
   ami           = data.aws_ami.amazon_linux.id
   instance_type = var.instance_type
