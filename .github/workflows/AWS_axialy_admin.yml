@@ -543,8 +543,8 @@ jobs:
         # Update system
         ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo dnf update -y"
         
-        # Install web server packages
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo dnf install -y httpd php php-cli php-fpm php-mysqlnd php-zip php-xml php-mbstring php-curl php-gd php-opcache mariadb105 unzip wget curl"
+        # Install web server packages (excluding curl to avoid conflicts)
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo dnf install -y httpd php php-cli php-fpm php-mysqlnd php-zip php-xml php-mbstring php-curl php-gd php-opcache mariadb105 unzip wget --skip-broken"
         
         echo "✓ System packages installed"
 
