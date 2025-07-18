@@ -286,101 +286,138 @@ jobs:
         echo "EC2 instance is running"
 
     - name: Setup SSH with passphrase-protected key
-      env:
-        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
-        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
-      run: |
-        echo "Setting up SSH with passphrase-protected key..."
-        
-        # Create SSH directory
-        mkdir -p ~/.ssh
-        chmod 700 ~/.ssh
-        
-        # Write the private key to file
-        echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/ec2_key.pem
-        chmod 600 ~/.ssh/ec2_key.pem
-        
-        # Install expect for handling passphrases
-        sudo apt-get update -qq
-        sudo apt-get install -y expect
-        
-        # Create improved expect script for SSH commands
-        cat > ~/.ssh/ssh_expect.exp << 'EOF'
-        #!/usr/bin/expect -f
-        set timeout 60
-        set host [lindex $argv 0]
-        set command [lindex $argv 1]
-        set passphrase $env(EC2_SSH_PASSPHRASE)
-        
-        log_user 1
-        
-        spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -i ~/.ssh/ec2_key.pem ec2-user@$host $command
-        
-        expect {
-            "Enter passphrase for key" {
-                send "$passphrase\r"
-                exp_continue
+          env:
+            INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+            EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+          run: |
+            echo "Setting up SSH with passphrase-protected key..."
+            
+            # Create SSH directory
+            mkdir -p ~/.ssh
+            chmod 700 ~/.ssh
+            
+            # Write the private key to file
+            echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/ec2_key.pem
+            chmod 600 ~/.ssh/ec2_key.pem
+            
+            # Install expect for handling passphrases
+            sudo apt-get update -qq
+            sudo apt-get install -y expect
+            
+            # Create improved expect script for SSH commands with shorter timeout
+            cat > ~/.ssh/ssh_expect.exp << 'EOF'
+            #!/usr/bin/expect -f
+            set timeout 120
+            set host [lindex $argv 0]
+            set command [lindex $argv 1]
+            set passphrase $env(EC2_SSH_PASSPHRASE)
+            
+            log_user 1
+            
+            # Use a more direct SSH approach
+            spawn ssh -o StrictHostKeyChecking=no \
+                      -o UserKnownHostsFile=/dev/null \
+                      -o ConnectTimeout=30 \
+                      -o ServerAliveInterval=10 \
+                      -o ServerAliveCountMax=3 \
+                      -o BatchMode=no \
+                      -i ~/.ssh/ec2_key.pem \
+                      ec2-user@$host \
+                      $command
+            
+            expect {
+                "Enter passphrase for key" {
+                    send "$passphrase\r"
+                    exp_continue
+                }
+                "Are you sure you want to continue connecting" {
+                    send "yes\r"
+                    exp_continue
+                }
+                "Permission denied" {
+                    puts stderr "SSH authentication failed"
+                    exit 1
+                }
+                "Connection refused" {
+                    puts stderr "SSH connection refused"
+                    exit 2
+                }
+                "No route to host" {
+                    puts stderr "No route to host"
+                    exit 3
+                }
+                -re ".*\\$ " {
+                    # Command prompt appeared - command completed
+                }
+                timeout {
+                    puts stderr "SSH timeout after 120 seconds"
+                    exit 4
+                }
+                eof {
+                    # Connection closed - command completed
+                }
             }
-            "Are you sure you want to continue connecting" {
-                send "yes\r"
-                exp_continue
+            
+            # Wait for the command to complete and capture exit code
+            catch wait result
+            set exit_code [lindex $result 3]
+            exit $exit_code
+            EOF
+            chmod +x ~/.ssh/ssh_expect.exp
+            
+            # Create improved expect script for SCP with longer timeout
+            cat > ~/.ssh/scp_expect.exp << 'EOF'
+            #!/usr/bin/expect -f
+            set timeout 300
+            set source [lindex $argv 0]
+            set dest [lindex $argv 1]
+            set passphrase $env(EC2_SSH_PASSPHRASE)
+            
+            log_user 1
+            
+            spawn scp -o StrictHostKeyChecking=no \
+                      -o UserKnownHostsFile=/dev/null \
+                      -o ConnectTimeout=30 \
+                      -r \
+                      -i ~/.ssh/ec2_key.pem \
+                      $source $dest
+            
+            expect {
+                "Enter passphrase for key" {
+                    send "$passphrase\r"
+                    exp_continue
+                }
+                "Are you sure you want to continue connecting" {
+                    send "yes\r"
+                    exp_continue
+                }
+                "Permission denied" {
+                    puts stderr "SCP authentication failed"
+                    exit 1
+                }
+                "Connection refused" {
+                    puts stderr "SCP connection refused"
+                    exit 2
+                }
+                "100%" {
+                    exp_continue
+                }
+                timeout {
+                    puts stderr "SCP timeout after 300 seconds"
+                    exit 4
+                }
+                eof {
+                    # Transfer completed
+                }
             }
-            "$ " {
-                # Command completed successfully
-            }
-            timeout {
-                puts stderr "SSH connection timeout after 60 seconds"
-                exit 1
-            }
-            eof {
-                # Command completed
-            }
-        }
-        
-        catch wait result
-        exit [lindex $result 3]
-        EOF
-        chmod +x ~/.ssh/ssh_expect.exp
-        
-        # Create improved expect script for SCP
-        cat > ~/.ssh/scp_expect.exp << 'EOF'
-        #!/usr/bin/expect -f
-        set timeout 120
-        set source [lindex $argv 0]
-        set dest [lindex $argv 1]
-        set passphrase $env(EC2_SSH_PASSPHRASE)
-        
-        log_user 1
-        
-        spawn scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r -i ~/.ssh/ec2_key.pem $source $dest
-        
-        expect {
-            "Enter passphrase for key" {
-                send "$passphrase\r"
-                exp_continue
-            }
-            "Are you sure you want to continue connecting" {
-                send "yes\r"
-                exp_continue
-            }
-            "100%" {
-                exp_continue
-            }
-            timeout {
-                puts stderr "SCP timeout after 120 seconds"
-                exit 1
-            }
-            eof {
-                # Transfer completed
-            }
-        }
-        
-        catch wait result
-        exit [lindex $result 3]
-        EOF
-        chmod +x ~/.ssh/scp_expect.exp
-        
-        echo "SSH setup completed"
+            
+            catch wait result
+            set exit_code [lindex $result 3]
+            exit $exit_code
+            EOF
+            chmod +x ~/.ssh/scp_expect.exp
+            
+            echo "SSH setup completed"
 
     - name: Wait for SSH to be available
       env:
