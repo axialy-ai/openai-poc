@@ -1,0 +1,46 @@
+{
+  "accountActions": [
+    {
+      "label": "Upgrade Account",
+      "actionType": "link",
+      "action": "upgrade-account.php",
+      "active": false
+    },
+    {
+      "label": "Manage Account",
+      "actionType": "link",
+      "action": "manage-subscription.php",
+      "active": true
+    },
+    {
+      "label": "Logout",
+      "actionType": "link",
+      "action": "logout.php",
+      "active": true
+    },
+    {
+      "label": "Leave Feedback",
+      "actionType": "js",
+      "action": "openFeedback()",
+      "active": false
+    },
+    {
+      "label": "Report Issues",
+      "actionType": "js",
+      "action": "reportIssue()",
+      "active": false
+    },
+    {
+      "label": "Toggle Light/Dark Mode",
+      "actionType": "js",
+      "action": "toggleMode()",
+      "active": false
+    },
+    {
+      "label": "End Demo",
+      "actionType": "link",
+      "action": "end_demo.php",
+      "active": false
+    }
+  ]
+}

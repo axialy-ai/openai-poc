@@ -1,0 +1,39 @@
+{
+  "feedbackResponseTypes": [
+    {
+      "label": "Revise or Approve",
+      "primaryResponse": "Revise",
+      "secondaryResponse": "Approve",
+      "description": "Stakeholders can choose Approve, or Revise with comment for each form item.",
+      "active": true
+    },
+    {
+      "label": "Respond Only",
+      "primaryResponse": "Respond",
+      "secondaryResponse": "",
+      "description": "Stakeholders have only the Respond option for each form item.",
+      "active": true
+    },
+    {
+      "label": "Yes/No",
+      "primaryResponse": "No",
+      "secondaryResponse": "Yes",
+      "description": "Stakeholders can choose Yes, or No with comment for each form item.",
+      "active": true
+    },
+    {
+      "label": "Agree/Disagree",
+      "primaryResponse": "Disagree",
+      "secondaryResponse": "Agree",
+      "description": "Stakeholders can choose Agree, or Disagree with comment for each form item.",
+      "active": true
+    },
+    {
+      "label": "Answer Question",
+      "primaryResponse": "Answer Question",
+      "secondaryResponse": "",
+      "description": "Stakeholders have only the Answer Question option for each form item.",
+      "active": true
+    }
+  ]
+}
