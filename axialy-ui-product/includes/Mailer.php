@@ -1,6 +1,6 @@
 <?php
 /**
- * Lightweight SMTP helper for Axialy.
+ * Lightweight SMTP helper for Axialy UI.
  *
  * Usage:
  *   $mail = \AxiaBA\Mailer::make();
@@ -9,44 +9,48 @@
  *   $mail->Body    = $html;
  *   $mail->send();
  *
- * Reads SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASSWORD / SMTP_SECURE
- * from the environment (already populated via .env).
+ * Reads SMTP configuration directly from environment variables.
  */
 
 namespace AxiaBA;
 
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
-use AxiaBA\Config\Config;
 
 final class Mailer
 {
     /** @throws Exception */
     public static function make(): PHPMailer
     {
-        $cfg  = Config::getInstance();
-
         $mail = new PHPMailer(true);            // Exceptions enabled
         $mail->isSMTP();                        // SMTP, not sendmail
+        
+        // Get SMTP settings from environment variables
         $mail->Host       = getenv('SMTP_HOST') ?: 'localhost';
-        $mail->Port       = getenv('SMTP_PORT') ?: 587;
+        $mail->Port       = (int)(getenv('SMTP_PORT') ?: 587);
         $mail->SMTPAuth   = true;
-        $mail->Username   = getenv('SMTP_USER');
-        $mail->Password   = getenv('SMTP_PASSWORD');
+        $mail->Username   = getenv('SMTP_USER') ?: '';
+        $mail->Password   = getenv('SMTP_PASSWORD') ?: '';
 
+        // Set encryption based on SMTP_SECURE setting
         $secure = strtolower(getenv('SMTP_SECURE') ?: 'tls');
-        $mail->SMTPSecure = ($secure === 'ssl')
-            ? PHPMailer::ENCRYPTION_SMTPS
-            : PHPMailer::ENCRYPTION_STARTTLS;
+        if ($secure === 'ssl') {
+            $mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;
+        } else {
+            $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+        }
 
         $mail->CharSet    = 'UTF-8';
         $mail->isHTML(true);
-        $mail->setFrom('support@axiaba.com', 'AxiaBA');
+        
+        // Set default from address
+        $fromEmail = getenv('SMTP_USER') ?: 'support@axiaba.com';
+        $fromName = 'AxiaBA';
+        $mail->setFrom($fromEmail, $fromName);
 
-        // a single call sites can tweak further (addReplyTo, addAttachment, …)
         return $mail;
     }
 
-    // static helper only – no instantiation
+    // Static helper only – no instantiation
     private function __construct() {}
 }
