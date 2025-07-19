@@ -586,6 +586,36 @@ jobs:
         
         echo "✓ UI application files deployed"
 
+
+    - name: Install Composer and PHP dependencies on EC2
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
+        echo "Installing Composer and PHP dependencies..."
+        
+        # Install Composer globally
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "cd ~ && curl -sS https://getcomposer.org/installer | sudo php"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo mv ~/composer.phar /usr/local/bin/composer"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chmod +x /usr/local/bin/composer"
+        
+        # Verify Composer installation
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "composer --version"
+        
+        # Install PHP dependencies in the application directory
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "cd /var/www/html/axialy-ui && sudo composer install --no-dev --optimize-autoloader"
+        
+        # Fix permissions for vendor directory
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chown -R apache:apache /var/www/html/axialy-ui/vendor/"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chmod -R 755 /var/www/html/axialy-ui/vendor/"
+        
+        # Verify PHPMailer installation
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "cd /var/www/html/axialy-ui && php -r \"require 'vendor/autoload.php'; echo class_exists('PHPMailer\\\\PHPMailer\\\\PHPMailer') ? 'PHPMailer: OK' : 'PHPMailer: MISSING'; echo PHP_EOL;\""
+        
+        echo "✓ Composer and PHP dependencies installed successfully"
+
+########
+
     - name: Start services and test on EC2
       env:
         INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
