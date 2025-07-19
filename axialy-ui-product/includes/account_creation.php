@@ -2,7 +2,10 @@
 // /includes/account_creation.php
 
 require_once __DIR__ . '/Config.php';
+require_once __DIR__ . '/Mailer.php';
+
 use AxiaBA\Config\Config;
+use AxiaBA\Mailer;
 
 class AccountCreation
 {
@@ -14,6 +17,10 @@ class AccountCreation
         $this->pdo    = $pdo;
         $this->config = Config::getInstance();
     }
+
+    /* ──────────────────────────────────── €
+     *  Helpers
+     * ──────────────────────────────────── */
 
     public function checkEmailExists(string $email): bool
     {
@@ -38,6 +45,10 @@ class AccountCreation
         return $token;
     }
 
+    /* ──────────────────────────────────── €
+     *  Outbound e‑mail (PHPMailer via SMTP)
+     * ──────────────────────────────────── */
+
     public function sendVerificationEmail(string $email, string $token): bool
     {
         $verificationLink =
@@ -45,24 +56,58 @@ class AccountCreation
             . '/verify_email.php?token=' . urlencode($token);
 
         $subject = 'Verify your email for AxiaBA';
-        $message = "
+        $message = <<<HTML
         <html><head><title>Email Verification</title></head><body>
         <h2>Welcome to AxiaBA</h2>
         <p>Please click the link below to verify your email address:</p>
-        <p><a href='$verificationLink'>Verify Email Address</a></p>
-        <p>If the above link is not clickable, copy &amp; paste this URL:</p>
-        <p>$verificationLink</p>
-        <p>This link expires in 24 hours.</p>
-        </body></html>";
+        <p><a href="{$verificationLink}">Verify Email Address</a></p>
+        <p>If the link is not clickable, copy &amp; paste this URL:</p>
+        <p>{$verificationLink}</p>
+        <p>This link expires in 24&nbsp;hours.</p>
+        </body></html>
+        HTML;
 
-        $headers = [
-            'MIME-Version: 1.0',
-            'Content-type: text/html; charset=UTF-8',
-            'From: AxiaBA <support@axiaba.com>',
-            'Reply-To: support@axiaba.com'
-        ];
-        return mail($email, $subject, $message, implode("\r\n", $headers));
+        try {
+            $mail = Mailer::make();
+            $mail->addAddress($email);
+            $mail->Subject = $subject;
+            $mail->Body    = $message;
+            return $mail->send();
+        } catch (\Throwable $e) {
+            error_log('Verification‑e‑mail error: '.$e->getMessage());
+            return false;
+        }
     }
+
+    private function sendWelcomeEmail(string $email): void
+    {
+        $loginUrl = rtrim($this->config->get('app_base_url') ?: '', '/')
+                  . '/login.php';
+
+        $subject = 'Your AxiaBA account is ready!';
+        $message = <<<HTML
+        <html><head><title>Welcome to AxiaBA</title></head><body>
+        <h2>Welcome aboard!</h2>
+        <p>Your account has been created successfully. You can now log in at:</p>
+        <p><a href="{$loginUrl}">AxiaBA&nbsp;Login</a></p>
+        <p>Thank you for choosing AxiaBA!</p>
+        </body></html>
+        HTML;
+
+        try {
+            $mail = Mailer::make();
+            $mail->addAddress($email);
+            $mail->Subject = $subject;
+            $mail->Body    = $message;
+            $mail->send();        // ignore result – best effort
+        } catch (\Throwable $e) {
+            error_log('Welcome‑e‑mail error: '.$e->getMessage());
+        }
+    }
+
+    /* ──────────────────────────────────── €
+     *  Token verification & account setup
+     * ──────────────────────────────────── */
 
     public function verifyToken(string $token): ?string
     {
@@ -112,28 +157,5 @@ class AccountCreation
             error_log('Account creation error: '.$e->getMessage());
             return false;
         }
-    }
-
-    private function sendWelcomeEmail(string $email): void
-    {
-        $loginUrl = rtrim($this->config->get('app_base_url') ?: '', '/')
-                  . '/login.php';
-
-        $subject = 'Your AxiaBA account is ready!';
-        $message = "
-        <html><head><title>Welcome to AxiaBA</title></head><body>
-        <h2>Welcome aboard!</h2>
-        <p>Your account has been created successfully. You can now log in at:</p>
-        <p><a href='$loginUrl'>AxiaBA Login</a></p>
-        <p>Thank you for choosing AxiaBA!</p>
-        </body></html>";
-
-        $headers = [
-            'MIME-Version: 1.0',
-            'Content-type: text/html; charset=UTF-8',
-            'From: AxiaBA <support@axiaba.com>',
-            'Reply-To: support@axiaba.com'
-        ];
-        @mail($email, $subject, $message, implode("\r\n", $headers));
     }
 }
