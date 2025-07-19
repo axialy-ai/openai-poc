@@ -586,7 +586,6 @@ jobs:
         
         echo "✓ UI application files deployed"
 
-
     - name: Install Composer and PHP dependencies on EC2
       env:
         INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
@@ -602,8 +601,9 @@ jobs:
         # Verify Composer installation
         ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "composer --version"
         
-        # Install PHP dependencies in the application directory
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "cd /var/www/html/axialy-ui && sudo composer install --no-dev --optimize-autoloader"
+        # Remove outdated lock file and install fresh dependencies
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "cd /var/www/html/axialy-ui && sudo rm -f composer.lock"
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "cd /var/www/html/axialy-ui && sudo COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader"
         
         # Fix permissions for vendor directory
         ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo chown -R apache:apache /var/www/html/axialy-ui/vendor/"
@@ -612,9 +612,10 @@ jobs:
         # Verify PHPMailer installation
         ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "cd /var/www/html/axialy-ui && php -r \"require 'vendor/autoload.php'; echo class_exists('PHPMailer\\\\PHPMailer\\\\PHPMailer') ? 'PHPMailer: OK' : 'PHPMailer: MISSING'; echo PHP_EOL;\""
         
+        # Verify Stripe SDK installation
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "cd /var/www/html/axialy-ui && php -r \"require 'vendor/autoload.php'; echo class_exists('Stripe\\\\Stripe') ? 'Stripe SDK: OK' : 'Stripe SDK: MISSING'; echo PHP_EOL;\""
+        
         echo "✓ Composer and PHP dependencies installed successfully"
-
-########
 
     - name: Start services and test on EC2
       env:
@@ -685,30 +686,6 @@ jobs:
         \""
         
         echo "✓ Database connection and dependency tests completed successfully"
-
-    - name: Test database connection on EC2
-      env:
-        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
-        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
-      run: |
-        echo "Testing database connection..."
-        
-        # Test database connection with the UI's expected configuration
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "php -r \"
-        require_once '/var/www/html/axialy-ui/includes/db_connection.php';
-        try {
-            echo 'Database connection successful!' . PHP_EOL;
-            echo 'Connected to: ' . getenv('UI_DB_HOST') . ':' . getenv('UI_DB_PORT') . PHP_EOL;
-            echo 'Database: ' . getenv('UI_DB_NAME') . PHP_EOL;
-        } catch (Exception \\\$e) {
-            echo 'Database connection failed: ' . \\\$e->getMessage() . PHP_EOL;
-            exit(1);
-        }
-        \""
-        
-        echo "✓ Database connection test completed"
-
-########
 
     - name: Verify service status on EC2
       env:
