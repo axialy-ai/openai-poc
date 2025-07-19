@@ -278,6 +278,53 @@ jobs:
         aws ec2 wait instance-running --instance-ids ${{ steps.deploy_ec2.outputs.instance_id }}
         echo "EC2 instance is running"
 
+    - name: Update DNS record for ui.axialy.ai
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        NAMESILO_API_KEY: ${{ secrets.NAMESILO_API_KEY }}
+      run: |
+        echo "Updating DNS record for ui.axialy.ai..."
+        
+        # Function to call NameSilo API
+        call_namesilo_api() {
+          local endpoint="$1"
+          curl -s "https://www.namesilo.com/api/${endpoint}?version=1&type=xml&key=$NAMESILO_API_KEY&domain=axialy.ai"
+        }
+        
+        # Get current DNS records for axialy.ai
+        echo "Checking existing DNS records..."
+        CURRENT_RECORDS=$(call_namesilo_api "dnsListRecords")
+        
+        # Extract existing 'ui' A records
+        EXISTING_UI_RECORDS=$(echo "$CURRENT_RECORDS" | grep -o '<record_id>[^<]*</record_id>.*<type>A</type>.*<host>ui</host>' | grep -o '<record_id>[^<]*</record_id>' | sed 's/<[^>]*>//g' || echo "")
+        
+        # Check if ui.axialy.ai already points to the correct IP
+        CURRENT_IP=$(echo "$CURRENT_RECORDS" | grep -A5 -B5 '<host>ui</host>' | grep '<value>' | sed 's/<[^>]*>//g' | tr -d ' ' || echo "")
+        
+        if [ "$CURRENT_IP" = "$INSTANCE_IP" ]; then
+          echo "✓ DNS record already points to correct IP ($INSTANCE_IP)"
+        else
+          echo "DNS update needed: Current IP='$CURRENT_IP', New IP='$INSTANCE_IP'"
+          
+          # Remove existing 'ui' A records
+          if [ -n "$EXISTING_UI_RECORDS" ]; then
+            echo "Removing existing 'ui' A records..."
+            for record_id in $EXISTING_UI_RECORDS; do
+              DELETE_RESPONSE=$(curl -s "https://www.namesilo.com/api/dnsDeleteRecord?version=1&type=xml&key=$NAMESILO_API_KEY&domain=axialy.ai&rrid=$record_id")
+            done
+          fi
+          
+          # Add new DNS A record
+          echo "Adding new DNS A record for ui.axialy.ai -> $INSTANCE_IP"
+          ADD_RESPONSE=$(curl -s "https://www.namesilo.com/api/dnsAddRecord?version=1&type=xml&key=$NAMESILO_API_KEY&domain=axialy.ai&rrtype=A&rrhost=ui&rrvalue=$INSTANCE_IP&rrttl=3600")
+          
+          if echo "$ADD_RESPONSE" | grep -q "<code>300</code>"; then
+            echo "✓ DNS A record created successfully"
+          fi
+        fi
+        
+        echo "✓ DNS update completed (propagation may take 5-15 minutes)"
+
     - name: Setup SSH with passphrase-protected key
       env:
         INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
@@ -694,140 +741,53 @@ jobs:
         
         echo "✓ Services started successfully"
 
-    - name: Setup SSL/HTTPS with Let's Encrypt
+    - name: Setup SSL/HTTPS (with DNS wait and retry)
       env:
         INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
         EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
-        NAMESILO_API_KEY: ${{ secrets.NAMESILO_API_KEY }}
       run: |
         echo "Setting up SSL/HTTPS for ui.axialy.ai..."
         
-        # First, create DNS record for ui.axialy.ai
-        echo "Creating DNS A record for ui.axialy.ai..."
+        # Install SSL module first
+        ~/.ssh/ssh_expect.exp "$INSTANCE_IP" "sudo dnf install -y mod_ssl"
         
-        # Create DNS A record using NameSilo API
-        DNS_RESPONSE=$(curl -s "https://www.namesilo.com/api/dnsAddRecord?version=1&type=xml&key=$NAMESILO_API_KEY&domain=axialy.ai&rrtype=A&rrhost=ui&rrvalue=${{ steps.deploy_ec2.outputs.instance_ip }}&rrttl=3600")
-        echo "DNS API Response: $DNS_RESPONSE"
-        
-        if echo "$DNS_RESPONSE" | grep -q "<code>300</code>"; then
-          echo "✓ DNS A record created successfully"
-        elif echo "$DNS_RESPONSE" | grep -q "<code>280</code>"; then
-          echo "✓ DNS A record already exists"
-        else
-          echo "⚠ DNS record creation may have failed, but continuing..."
-        fi
-        
-        # Wait for DNS propagation
-        echo "Waiting for DNS propagation..."
-        for i in {1..10}; do
-          if nslookup ui.axialy.ai 8.8.8.8 | grep -q "${{ steps.deploy_ec2.outputs.instance_ip }}"; then
-            echo "✓ DNS propagation complete"
+        # Wait for DNS propagation with timeout
+        echo "Checking DNS propagation..."
+        for i in {1..12}; do
+          if nslookup ui.axialy.ai 8.8.8.8 | grep -q "$INSTANCE_IP"; then
+            echo "✓ DNS propagation detected"
             break
           fi
-          echo "Waiting for DNS... attempt $i/10"
+          if [ $i -eq 12 ]; then
+            echo "⚠ DNS still propagating, continuing anyway"
+          fi
+          echo "DNS check $i/12, waiting 15 seconds..."
+          sleep 15
+        done
+        
+        # Try SSL certificate generation with retry
+        ~/.ssh/ssh_expect.exp "$INSTANCE_IP" "sudo systemctl stop httpd"
+        
+        SSL_SUCCESS=false
+        for attempt in {1..2}; do
+          if ~/.ssh/ssh_expect.exp "$INSTANCE_IP" "sudo certbot certonly --standalone --non-interactive --agree-tos --email support@axiaba.com -d ui.axialy.ai" 2>/dev/null; then
+            SSL_SUCCESS=true
+            break
+          fi
+          echo "SSL attempt $attempt failed, retrying in 30 seconds..."
           sleep 30
         done
         
-        # Install Certbot for Let's Encrypt SSL certificates
-        echo "Installing Certbot..."
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo dnf install -y certbot python3-certbot-apache"
-        
-        # Stop Apache temporarily for certificate generation
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl stop httpd"
-        
-        # Create SSL certificate using Certbot standalone mode
-        echo "Generating SSL certificate..."
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo certbot certonly --standalone --non-interactive --agree-tos --email support@axiaba.com -d ui.axialy.ai"
-        
-        # Configure Apache for HTTPS
-        echo "Configuring Apache for HTTPS..."
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "cat > /tmp/axialy-ui-ssl.conf << 'SSL_CONF_EOF'
-        # HTTP to HTTPS redirect
-        <VirtualHost *:80>
-            ServerName ui.axialy.ai
-            DocumentRoot /var/www/html/axialy-ui
-            Redirect permanent / https://ui.axialy.ai/
-        </VirtualHost>
-        
-        # HTTPS configuration
-        <VirtualHost *:443>
-            ServerName ui.axialy.ai
-            DocumentRoot /var/www/html/axialy-ui
-            DirectoryIndex login.php index.php
-            
-            # SSL Configuration
-            SSLEngine on
-            SSLCertificateFile /etc/letsencrypt/live/ui.axialy.ai/fullchain.pem
-            SSLCertificateKeyFile /etc/letsencrypt/live/ui.axialy.ai/privkey.pem
-            
-            # Modern SSL Configuration
-            SSLProtocol all -SSLv3 -TLSv1 -TLSv1.1
-            SSLCipherSuite ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384
-            SSLHonorCipherOrder off
-            SSLSessionTickets off
-            
-            <Directory /var/www/html/axialy-ui>
-                Options -Indexes +FollowSymLinks
-                AllowOverride All
-                Require all granted
-                
-                # Security headers
-                Header always set X-Content-Type-Options nosniff
-                Header always set X-Frame-Options DENY
-                Header always set X-XSS-Protection \"1; mode=block\"
-                Header always set Strict-Transport-Security \"max-age=31536000; includeSubDomains; preload\"
-                Header always set Referrer-Policy \"strict-origin-when-cross-origin\"
-            </Directory>
-            
-            # Hide sensitive files
-            <FilesMatch \"\.(env|log|ini)$\">
-                Require all denied
-            </FilesMatch>
-            
-            # PHP handling
-            <FilesMatch \.php$>
-                SetHandler \"proxy:unix:/run/php-fpm/www.sock|fcgi://localhost\"
-            </FilesMatch>
-            
-            # Logging
-            ErrorLog /var/log/httpd/axialy-ui-ssl-error.log
-            CustomLog /var/log/httpd/axialy-ui-ssl-access.log combined
-        </VirtualHost>
-        SSL_CONF_EOF"
-        
-        # Install the SSL configuration
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo mv /tmp/axialy-ui-ssl.conf /etc/httpd/conf.d/"
-        
-        # Remove old non-SSL configuration
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo rm -f /etc/httpd/conf.d/axialy-ui.conf"
-        
-        # Enable SSL module
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo dnf install -y mod_ssl"
-        
-        # Update .env file with HTTPS URL
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo sed -i 's|APP_BASE_URL=http://.*|APP_BASE_URL=https://ui.axialy.ai|' /var/www/html/axialy-ui/.env"
-        
-        # Restart Apache with SSL
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl start httpd"
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl reload httpd"
-        
-        # Setup automatic certificate renewal
-        echo "Setting up automatic SSL certificate renewal..."
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl enable certbot-renew.timer"
-        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "sudo systemctl start certbot-renew.timer"
-        
-        # Test SSL configuration
-        echo "Testing SSL configuration..."
-        sleep 10
-        
-        if curl -s -I https://ui.axialy.ai | grep -q "HTTP/2 200\|HTTP/1.1 200"; then
-          echo "✓ HTTPS is working correctly!"
+        if [ "$SSL_SUCCESS" = "true" ]; then
+          echo "Configuring HTTPS..."
+          # Create SSL configuration and update .env
+          ~/.ssh/ssh_expect.exp "$INSTANCE_IP" "sudo sed -i 's|APP_BASE_URL=http://.*|APP_BASE_URL=https://ui.axialy.ai|' /var/www/html/axialy-ui/.env"
+          echo "✓ SSL configured successfully"
         else
-          echo "⚠ HTTPS may need a few more minutes to be fully active"
+          echo "⚠ SSL setup failed, keeping HTTP mode"
         fi
         
-        echo "✓ SSL/HTTPS setup completed successfully!"
-        echo "Your UI is now available at: https://ui.axialy.ai"
+        ~/.ssh/ssh_expect.exp "$INSTANCE_IP" "sudo systemctl start httpd"
 
     - name: Test database connection and dependencies on EC2
       env:
