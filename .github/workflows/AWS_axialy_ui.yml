@@ -284,46 +284,77 @@ jobs:
         NAMESILO_API_KEY: ${{ secrets.NAMESILO_API_KEY }}
       run: |
         echo "Updating DNS record for ui.axialy.ai..."
+        echo "Current EC2 IP: $INSTANCE_IP"
         
-        # Function to call NameSilo API
-        call_namesilo_api() {
-          local endpoint="$1"
-          curl -s "https://www.namesilo.com/api/${endpoint}?version=1&type=xml&key=$NAMESILO_API_KEY&domain=axialy.ai"
-        }
+        # Get current DNS records for axialy.ai using JSON format
+        echo "Fetching current DNS records..."
+        CURRENT_RECORDS=$(curl -s "https://www.namesilo.com/api/dnsListRecords?version=1&type=json&key=$NAMESILO_API_KEY&domain=axialy.ai")
+        echo "DNS API Response: $CURRENT_RECORDS"
         
-        # Get current DNS records for axialy.ai
-        echo "Checking existing DNS records..."
-        CURRENT_RECORDS=$(call_namesilo_api "dnsListRecords")
+        # Extract all ui.axialy.ai A records and their IPs
+        echo "Checking existing ui.axialy.ai records..."
         
-        # Extract existing 'ui' A records
-        EXISTING_UI_RECORDS=$(echo "$CURRENT_RECORDS" | grep -o '<record_id>[^<]*</record_id>.*<type>A</type>.*<host>ui</host>' | grep -o '<record_id>[^<]*</record_id>' | sed 's/<[^>]*>//g' || echo "")
+        # Check if the current IP already has a record
+        CURRENT_IP_EXISTS=$(echo "$CURRENT_RECORDS" | grep -o '"host":"ui\.axialy\.ai".*"value":"'$INSTANCE_IP'"' | wc -l)
         
-        # Check if ui.axialy.ai already points to the correct IP
-        CURRENT_IP=$(echo "$CURRENT_RECORDS" | grep -A5 -B5 '<host>ui</host>' | grep '<value>' | sed 's/<[^>]*>//g' | tr -d ' ' || echo "")
-        
-        if [ "$CURRENT_IP" = "$INSTANCE_IP" ]; then
-          echo "✓ DNS record already points to correct IP ($INSTANCE_IP)"
+        if [ "$CURRENT_IP_EXISTS" -gt 0 ]; then
+          echo "✓ Current IP ($INSTANCE_IP) already has a DNS record"
         else
-          echo "DNS update needed: Current IP='$CURRENT_IP', New IP='$INSTANCE_IP'"
-          
-          # Remove existing 'ui' A records
-          if [ -n "$EXISTING_UI_RECORDS" ]; then
-            echo "Removing existing 'ui' A records..."
-            for record_id in $EXISTING_UI_RECORDS; do
-              DELETE_RESPONSE=$(curl -s "https://www.namesilo.com/api/dnsDeleteRecord?version=1&type=xml&key=$NAMESILO_API_KEY&domain=axialy.ai&rrid=$record_id")
-            done
-          fi
-          
-          # Add new DNS A record
-          echo "Adding new DNS A record for ui.axialy.ai -> $INSTANCE_IP"
-          ADD_RESPONSE=$(curl -s "https://www.namesilo.com/api/dnsAddRecord?version=1&type=xml&key=$NAMESILO_API_KEY&domain=axialy.ai&rrtype=A&rrhost=ui&rrvalue=$INSTANCE_IP&rrttl=3600")
-          
-          if echo "$ADD_RESPONSE" | grep -q "<code>300</code>"; then
-            echo "✓ DNS A record created successfully"
-          fi
+          echo "Current IP ($INSTANCE_IP) needs DNS record"
         fi
         
-        echo "✓ DNS update completed (propagation may take 5-15 minutes)"
+        # Find ALL ui.axialy.ai A records (including the current IP)
+        UI_RECORD_IDS=$(echo "$CURRENT_RECORDS" | grep -o '"record_id":"[^"]*"[^}]*"type":"A"[^}]*"host":"ui\.axialy\.ai"' | grep -o '"record_id":"[^"]*"' | sed 's/"record_id":"//g; s/"//g')
+        
+        if [ -n "$UI_RECORD_IDS" ]; then
+          echo "Found existing ui.axialy.ai A records:"
+          echo "$UI_RECORD_IDS"
+          
+          echo "Removing ALL existing ui.axialy.ai A records..."
+          for record_id in $UI_RECORD_IDS; do
+            echo "Deleting record ID: $record_id"
+            DELETE_RESPONSE=$(curl -s "https://www.namesilo.com/api/dnsDeleteRecord?version=1&type=json&key=$NAMESILO_API_KEY&domain=axialy.ai&rrid=$record_id")
+            echo "Delete response: $DELETE_RESPONSE"
+            
+            # Check if deletion was successful
+            if echo "$DELETE_RESPONSE" | grep -q '"code":300'; then
+              echo "✓ Successfully deleted record $record_id"
+            else
+              echo "⚠ Warning: Failed to delete record $record_id"
+            fi
+          done
+        else
+          echo "No existing ui.axialy.ai A records found"
+        fi
+        
+        # Add new DNS A record for current IP
+        echo "Adding new DNS A record: ui.axialy.ai -> $INSTANCE_IP"
+        ADD_RESPONSE=$(curl -s "https://www.namesilo.com/api/dnsAddRecord?version=1&type=json&key=$NAMESILO_API_KEY&domain=axialy.ai&rrtype=A&rrhost=ui&rrvalue=$INSTANCE_IP&rrttl=3600")
+        echo "Add DNS response: $ADD_RESPONSE"
+        
+        if echo "$ADD_RESPONSE" | grep -q '"code":300'; then
+          echo "✓ DNS A record created successfully for $INSTANCE_IP"
+        else
+          echo "❌ Failed to create DNS A record"
+          echo "Response: $ADD_RESPONSE"
+          exit 1
+        fi
+        
+        # Verify the cleanup worked
+        echo "Verifying DNS cleanup..."
+        sleep 5
+        VERIFY_RECORDS=$(curl -s "https://www.namesilo.com/api/dnsListRecords?version=1&type=json&key=$NAMESILO_API_KEY&domain=axialy.ai")
+        UI_COUNT=$(echo "$VERIFY_RECORDS" | grep -o '"host":"ui\.axialy\.ai".*"type":"A"' | wc -l)
+        
+        echo "After cleanup: Found $UI_COUNT ui.axialy.ai A record(s)"
+        if [ "$UI_COUNT" -eq 1 ]; then
+          echo "✓ DNS cleanup successful - only one ui.axialy.ai record exists"
+        else
+          echo "⚠ Warning: Expected 1 record, found $UI_COUNT"
+        fi
+        
+        echo "✓ DNS update completed"
+        echo "Note: DNS propagation may take 5-15 minutes globally"
 
     - name: Setup SSH with passphrase-protected key
       env:
