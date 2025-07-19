@@ -27,6 +27,9 @@ final class Mailer
     /** @throws Exception */
     public static function make(): PHPMailer
     {
+        // Load environment variables from .env file
+        self::loadEnvFile();
+        
         $mail = new PHPMailer(true);            // Exceptions enabled
         $mail->isSMTP();                        // SMTP, not sendmail
         
@@ -54,6 +57,44 @@ final class Mailer
         $mail->setFrom($fromEmail, $fromName);
 
         return $mail;
+    }
+
+    /**
+     * Load environment variables from .env file
+     */
+    private static function loadEnvFile(): void
+    {
+        $envFile = __DIR__ . '/../.env';
+        
+        if (!file_exists($envFile)) {
+            return;
+        }
+        
+        $lines = file($envFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        if (!$lines) {
+            return;
+        }
+        
+        foreach ($lines as $line) {
+            $line = trim($line);
+            
+            // Skip comments and empty lines
+            if ($line === '' || $line[0] === '#') {
+                continue;
+            }
+            
+            // Skip lines without = 
+            if (strpos($line, '=') === false) {
+                continue;
+            }
+            
+            // Parse key=value
+            [$key, $value] = array_map('trim', explode('=', $line, 2));
+            
+            if ($key !== '' && getenv($key) === false) {
+                putenv("$key=$value");
+            }
+        }
     }
 
     // Static helper only – no instantiation
