@@ -9,18 +9,13 @@
 
 declare(strict_types=1);
 
-// ────────────────────────────────────────────────────
-// 1) Bootstrap Composer autoload (for PHPMailer, etc.)
-// ────────────────────────────────────────────────────
-require_once __DIR__ . '/vendor/autoload.php';
-
 require_once __DIR__ . '/includes/db_connection.php';
 require_once __DIR__ . '/includes/account_creation.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
 /*-------------------------------------------------
- | 2. Only allow POST
+ | 1. Only allow POST
  *------------------------------------------------*/
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);               // Method Not Allowed
@@ -32,7 +27,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 }
 
 /*-------------------------------------------------
- | 3. Basic validation of the e-mail field
+ | 2. Basic validation of the e-mail field
  *------------------------------------------------*/
 $email = trim($_POST['email'] ?? '');
 $accountCreation = new AccountCreation($pdo);
@@ -47,12 +42,12 @@ try {
     }
 
     /*---------------------------------------------
-     | 4. Create token & attempt to send e-mail
+     | 3. Create token & attempt to send e-mail
      *-------------------------------------------*/
     $token = $accountCreation->createVerificationToken($email);
 
     if (!$accountCreation->sendVerificationEmail($email, $token)) {
-        /* 4a.  If sending failed, delete the token so the
+        /* 3a.  If sending failed, delete the token so the
          *       user can retry immediately, then raise error.
          */
         $stmt = $pdo->prepare('DELETE FROM email_verifications WHERE token = ?');
@@ -62,22 +57,22 @@ try {
     }
 
     /*---------------------------------------------
-     | 5. All good – return success JSON
+     | 4. All good – return success JSON
      *-------------------------------------------*/
-    http_response_code(200);
     echo json_encode([
         'status'  => 'success',
         'message' => 'Verification e-mail sent. Please check your inbox.'
     ]);
+    http_response_code(200);
     exit;
 
 } catch (Throwable $e) {
     /*-------------------------------------------------
-     | 6. Error handling & logging
+     | 5. Error handling & logging
      *------------------------------------------------*/
-    error_log('[Axialy UI] start_verification error: ' . $e->getMessage());
+    error_log('[AxiaBA] start_verification error: ' . $e->getMessage());
 
-    // 400 = Bad Request for user-triggered errors
+    // 400 = Bad Request is fine for all user-triggered errors here
     http_response_code(400);
     echo json_encode([
         'status'  => 'error',
