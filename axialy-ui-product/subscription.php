@@ -4,8 +4,8 @@ ini_set('display_errors', 0);
 ini_set('log_errors', 1);
 error_reporting(E_ALL);
 
-// Load new config
-require_once '/home/i17z4s936h3j/private_axiaba/includes/Config.php';
+// Load config using the same approach as other UI files
+require_once __DIR__ . '/includes/Config.php';
 use AxiaBA\Config\Config;
 $config = Config::getInstance();
 
@@ -36,13 +36,13 @@ try {
     die('An error occurred. Please try again later.');
 }
 
-// Optional: configure SSL certificates if needed
-putenv("CURL_CA_BUNDLE=/home/i17z4s936h3j/public_html/certs/cacert.pem");
-ini_set('curl.cainfo', '/home/i17z4s936h3j/public_html/certs/cacert.pem');
-ini_set('openssl.cafile', '/home/i17z4s936h3j/public_html/certs/cacert.pem');
-
 // Use Stripe API key from config
-\Stripe\Stripe::setApiKey($config['stripe_api_key']);
+$stripeApiKey = getenv('STRIPE_API_KEY');
+if (!$stripeApiKey) {
+    die('Stripe configuration not found. Please contact support.');
+}
+
+\Stripe\Stripe::setApiKey($stripeApiKey);
 
 /**
  * Handle POST requests: 
@@ -59,6 +59,12 @@ try {
 } catch (\Stripe\Exception\ApiErrorException $e) {
     error_log('Setup Intent error: ' . $e->getMessage());
     die('An error occurred while initializing the payment process. Please try again later.');
+}
+
+// Get Stripe publishable key
+$stripePublishableKey = getenv('STRIPE_PUBLISHABLE_KEY');
+if (!$stripePublishableKey) {
+    die('Stripe configuration not found. Please contact support.');
 }
 ?>
 <!DOCTYPE html>
@@ -367,8 +373,8 @@ try {
 
 <script>
 // ================== Stripe Setup ======================
-const stripe = Stripe('<?php echo $config['stripe_publishable_key']; ?>');
-const clientSecret = '<?php echo $clientSecret; ?>';
+const stripe = Stripe('<?php echo htmlspecialchars($stripePublishableKey); ?>');
+const clientSecret = '<?php echo htmlspecialchars($clientSecret); ?>';
 
 const elements = stripe.elements();
 const cardElement = elements.create('card');
