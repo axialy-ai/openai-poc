@@ -963,6 +963,7 @@ jobs:
         echo ""
         echo "Access URLs:"
         echo "- UI Login Page: $UI_URL/login.php"
+        echo "- UI Login Page: https://ui.axialy.ai/login.php (or $UI_URL/login.php if SSL failed)"
         echo "- UI Application: $UI_URL (redirects to login)"
         echo ""
         echo "SSH Access:"
