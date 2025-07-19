@@ -1,1 +1,12 @@
-{"require": {"stripe/stripe-php": "^10.0"}}
+{
+  "require": {
+    "stripe/stripe-php": "^10.0",
+    "phpmailer/phpmailer": "^6.9"
+  },
+  "autoload": {
+    "psr-4": {
+      "Stripe\\": "lib/",
+      "AxiaBA\\": "includes/"
+    }
+  }
+}
