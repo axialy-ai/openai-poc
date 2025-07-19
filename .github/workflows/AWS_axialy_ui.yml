@@ -498,6 +498,25 @@ jobs:
         ~/.ssh/scp_expect.exp axialy-ui-product/ "ec2-user@${{ steps.deploy_ec2.outputs.instance_ip }}:~/"
         echo "✓ File transfer completed"
 
+    - name: Install Composer and PHP dependencies on EC2
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
+        echo "Installing Composer and PHP dependencies..."
+        ~/.ssh/ssh_expect.exp "$INSTANCE_IP" "
+          # Download and install Composer globally
+          curl -sS https://getcomposer.org/installer | php &&
+          sudo mv composer.phar /usr/local/bin/composer &&
+
+          # Move into the deployed UI directory
+          cd /var/www/html/axialy-ui &&
+
+          # Install all required PHP packages (no dev)
+          composer install --no-dev --optimize-autoloader
+        "
+        echo "✓ Composer install completed"
+
     - name: Install system packages on EC2
       env:
         INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
