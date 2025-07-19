@@ -635,6 +635,57 @@ jobs:
         
         echo "✓ Services started successfully"
 
+    - name: Test database connection and dependencies on EC2
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
+        echo "Testing database connection and PHP dependencies..."
+        
+        # Test database connection with the UI's expected configuration
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "php -r \"
+        require_once '/var/www/html/axialy-ui/includes/db_connection.php';
+        try {
+            echo 'Database connection successful!' . PHP_EOL;
+            echo 'Connected to: ' . getenv('UI_DB_HOST') . ':' . getenv('UI_DB_PORT') . PHP_EOL;
+            echo 'Database: ' . getenv('UI_DB_NAME') . PHP_EOL;
+        } catch (Exception \\\$e) {
+            echo 'Database connection failed: ' . \\\$e->getMessage() . PHP_EOL;
+            exit(1);
+        }
+        \""
+        
+        # Test PHPMailer availability
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "cd /var/www/html/axialy-ui && php -r \"
+        require_once 'vendor/autoload.php';
+        use PHPMailer\PHPMailer\PHPMailer;
+        try {
+            \\\$mail = new PHPMailer(true);
+            echo 'PHPMailer loaded successfully!' . PHP_EOL;
+            echo 'PHPMailer version: ' . PHPMailer::VERSION . PHP_EOL;
+        } catch (Exception \\\$e) {
+            echo 'PHPMailer test failed: ' . \\\$e->getMessage() . PHP_EOL;
+            exit(1);
+        }
+        \""
+        
+        # Test email configuration (without actually sending)
+        ~/.ssh/ssh_expect.exp "${{ steps.deploy_ec2.outputs.instance_ip }}" "cd /var/www/html/axialy-ui && php -r \"
+        require_once 'includes/Mailer.php';
+        use AxiaBA\Mailer;
+        try {
+            \\\$mail = Mailer::make();
+            echo 'SMTP configuration loaded successfully!' . PHP_EOL;
+            echo 'SMTP Host: ' . getenv('SMTP_HOST') . PHP_EOL;
+            echo 'SMTP Port: ' . getenv('SMTP_PORT') . PHP_EOL;
+        } catch (Exception \\\$e) {
+            echo 'SMTP configuration test failed: ' . \\\$e->getMessage() . PHP_EOL;
+            exit(1);
+        }
+        \""
+        
+        echo "✓ Database connection and dependency tests completed successfully"
+
     - name: Test database connection on EC2
       env:
         INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
@@ -656,6 +707,8 @@ jobs:
         \""
         
         echo "✓ Database connection test completed"
+
+########
 
     - name: Verify service status on EC2
       env:
