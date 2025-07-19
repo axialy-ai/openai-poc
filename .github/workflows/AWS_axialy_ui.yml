@@ -436,6 +436,8 @@ jobs:
           sleep 30
         done
 
+########
+
     - name: Prepare UI application files
       env:
         INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
@@ -482,6 +484,64 @@ jobs:
         APP_BASE_URL=http://${{ steps.deploy_ec2.outputs.instance_ip }}
         API_BASE_URL=
         INTERNAL_API_KEY=
+        
+        # Version
+        APP_VERSION=1.0.0
+        EOF
+        
+        echo "✓ UI application files prepared with correct .env"
+
+    - name: Prepare UI application files
+      env:
+        INSTANCE_IP: ${{ steps.deploy_ec2.outputs.instance_ip }}
+        EC2_SSH_PASSPHRASE: ${{ secrets.EC2_SSH_PASSPHRASE }}
+      run: |
+        echo "Preparing UI application files for deployment..."
+        
+        # Verify axialy-ui-product directory exists (as required)
+        if [ ! -d "axialy-ui-product" ]; then
+          echo "ERROR: axialy-ui-product directory not found at repo root!"
+          echo "Available directories:"
+          ls -la
+          exit 1
+        fi
+        
+        echo "✓ Found axialy-ui-product source directory"
+        echo "Contents:"
+        ls -la axialy-ui-product/ | head -10
+        
+        # Create the .env file for UI application
+        cat > axialy-ui-product/.env << EOF
+        # Database configuration for UI
+        UI_DB_HOST=${{ secrets.DB_HOST }}
+        UI_DB_PORT=${{ secrets.DB_PORT }}
+        UI_DB_USER=${{ secrets.DB_USER }}
+        UI_DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+        UI_DB_NAME=axialy_ui
+        
+        # Legacy database config (for backward compatibility)
+        DB_HOST=${{ secrets.DB_HOST }}
+        DB_PORT=${{ secrets.DB_PORT }}
+        DB_USER=${{ secrets.DB_USER }}
+        DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+        DB_NAME=axialy_ui
+        
+        # SMTP configuration
+        SMTP_HOST=${{ secrets.SMTP_HOST }}
+        SMTP_PORT=${{ secrets.SMTP_PORT }}
+        SMTP_USER=${{ secrets.SMTP_USER }}
+        SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}
+        SMTP_SECURE=${{ secrets.SMTP_SECURE }}
+        
+        # Application URLs
+        APP_BASE_URL=http://${{ steps.deploy_ec2.outputs.instance_ip }}
+        API_BASE_URL=
+        INTERNAL_API_KEY=
+        
+        # Stripe configuration
+        STRIPE_API_KEY=${{ secrets.STRIPE_API_KEY }}
+        STRIPE_PUBLISHABLE_KEY=${{ secrets.STRIPE_PUBLISHABLE_KEY }}
+        STRIPE_WEBHOOK_SECRET=${{ secrets.STRIPE_WEBHOOK_SECRET }}
         
         # Version
         APP_VERSION=1.0.0
